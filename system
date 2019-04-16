@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+
+import psutil
+import datetime
+import collections
+import time
+import argparse
+
+def main():
+	parser = argparse.ArgumentParser(
+		description="Get system's performance information.")
+	parser.add_argument('-i', '--interval', type=int,
+		default=None,
+		help='interval')
+	parser.add_argument('-f', '--fields', type=str,
+		default=None, nargs='+',
+		help='list of fields to show')
+	args = parser.parse_args()
+	#print(args)
+	if args.interval == None or args.interval <= 0:
+		args.interval = 1
+
+	st = Stat(args.fields)
+	print(st.getHeader())
+	while True:
+		time.sleep(args.interval)
+		print(st.getLine())
+
+class Stat:
+	# Controle
+	fields = None
+	columns = None
+	format_line = None
+	cpus = None
+
+	def __init__(self, fields=None):
+		self.cpus = psutil.cpu_count()
+		if isinstance(fields, list) and len(fields) > 0: self.fields = fields
+
+	def getTime(self):
+		return datetime.datetime.now().strftime('%s')
+
+	def getData(self):
+		percent = psutil.cpu_percent(percpu=True)
+		times = psutil.cpu_times_percent(percpu=True)
+
+		data = collections.OrderedDict()
+		data['time'] = self.getTime()
+		for i in range(0,self.cpus):
+			data['cpu{}_total'.format(i)]      = percent[i]
+			data['cpu{}_user'.format(i)]       = times[i].user
+			data['cpu{}_nice'.format(i)]       = times[i].nice
+			data['cpu{}_system'.format(i)]     = times[i].system
+			data['cpu{}_idle'.format(i)]       = times[i].idle
+			data['cpu{}_iowait'.format(i)]     = times[i].iowait
+			data['cpu{}_irq'.format(i)]        = times[i].irq
+			data['cpu{}_softirq'.format(i)]    = times[i].softirq
+			data['cpu{}_steal'.format(i)]      = times[i].steal
+			data['cpu{}_guest'.format(i)]      = times[i].guest
+			data['cpu{}_guest_nice'.format(i)] = times[i].guest_nice
+		return data
+
+	def getColumns(self):
+		if self.columns == None:
+			data = self.getData()
+			if self.fields != None:
+				fields = []
+				for i in self.fields:
+					if i not in data.keys(): raise Exception('field "{}" not found'.format(i))
+					fields.append(i)
+			else:
+				fields = list(data.keys())
+			l = []
+			for i in range(0,len(fields)): l.append('{}')
+			self.format_line = '; '.join(l)
+			self.columns = fields
+			self.header = '#' + self.format_line.format(*self.columns)
+		return self.columns
+
+	def getHeader(self):
+		self.getColumns()
+		return self.header
+
+	def getLine(self):
+		data = self.getData()
+		columns = self.getColumns()
+		values = []
+		for i in columns:
+			values.append(data[i])
+		return self.format_line.format(*values)
+
+if __name__ == '__main__':
+	main()

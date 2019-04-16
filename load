@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+
+import argparse
+import psutil
+import datetime
+
+def main():
+	parser = argparse.ArgumentParser(
+		description="Load the system.")
+	parser.add_argument('-l', '--loops', type=int,
+		default=1,
+		help='number of loops')
+	parser.add_argument('-i', '--infinite', type=bool,
+		default=False,
+		help='infinite loops')
+	parser.add_argument('-c', '--command', type=str,
+		default=None,
+		help='command (use %f for to indicate the file)')
+	parser.add_argument('-f', '--files', type=str,
+		default=None, nargs='+',
+		help='list of files to process using the command')
+	args = parser.parse_args()
+	print(args)
+
+if __name__ == '__main__':
+	main()
