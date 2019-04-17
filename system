@@ -26,6 +26,8 @@ def main():
 		time.sleep(args.interval)
 		print(st.getLine())
 
+	return 0
+
 class Stat:
 	# Controle
 	fields = None
@@ -90,4 +92,4 @@ class Stat:
 		return self.format_line.format(*values)
 
 if __name__ == '__main__':
-	main()
+	exit(main())

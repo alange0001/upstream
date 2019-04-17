@@ -13,18 +13,18 @@ first_line = True
 def main():
 	parser = argparse.ArgumentParser(
 		description="Load the system.")
-	parser.add_argument('-l', '--loops', type=int,
-		default=1,
-		help='number of loops')
-	parser.add_argument('-i', '--infinite', type=bool,
-		default=False,
-		help='infinite loops')
 	parser.add_argument('-c', '--command', type=str,
-		default=None,
-		help='command (use %f for to indicate the file)')
+		default=None, required=True,
+		help='command (use %%f for to indicate the file)')
 	parser.add_argument('-f', '--files', type=str,
 		default=None, nargs='+',
 		help='list of files to process using the command')
+	parser.add_argument('-l', '--loops', type=int,
+		default=1,
+		help='number of loops')
+	parser.add_argument('-i', '--infinite',
+		default=False, action='store_true',
+		help='infinite loops')
 	args = parser.parse_args()
 	#print(args)
 
@@ -36,9 +36,11 @@ def main():
 		for i in args.files:
 			print_line(execute(args.command, i))
 
+		if args.infinite: continue
 		count += 1
-		if (not args.infinite) and (count >= args.loops):
-			break
+		if count >= args.loops: break
+
+	return 0
 
 def print_line(output):
 	global first_line
@@ -69,4 +71,4 @@ def execute(command, file):
 	return ret
 
 if __name__ == '__main__':
-	main()
+	exit(main())
