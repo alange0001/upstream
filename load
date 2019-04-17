@@ -2,7 +2,13 @@
 
 import argparse
 import psutil
+import subprocess
+import shlex
 import datetime
+import time
+import collections
+
+first_line = True
 
 def main():
 	parser = argparse.ArgumentParser(
@@ -20,7 +26,47 @@ def main():
 		default=None, nargs='+',
 		help='list of files to process using the command')
 	args = parser.parse_args()
-	print(args)
+	#print(args)
+
+	if args.files == None:
+		args.files = [None]
+
+	count = 0
+	while True:
+		for i in args.files:
+			print_line(execute(args.command, i))
+
+		count += 1
+		if (not args.infinite) and (count >= args.loops):
+			break
+
+def print_line(output):
+	global first_line
+	if first_line:
+		print('#'+'; '.join(output.keys()))
+		first_line = False
+	print('; '.join(output.values()))
+
+def execute(command, file):
+	ret = collections.OrderedDict()
+	cmd = command.replace('%f', file) if file != None else command
+	cmd_list = shlex.split(cmd)
+	ret['time'] = datetime.datetime.now().strftime('%s')
+	time_start = time.time()
+	p = psutil.Popen(cmd_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+	while True:
+		time.sleep(0.01)
+		cpu_times = p.cpu_times()
+		if p.poll() != None:
+			break
+	time_end = time.time()
+	ret['elapsed_time']    = '{:.3f}'.format(time_end - time_start)
+	ret['cpu_percent']     = '{:.1f}'.format(((cpu_times.user + cpu_times.system)/(time_end - time_start))*100)
+	ret['user']            = str(cpu_times.user)
+	ret['system']          = str(cpu_times.system)
+	ret['children_user']   = str(cpu_times.children_user)
+	ret['children_system'] = str(cpu_times.children_system)
+	return ret
 
 if __name__ == '__main__':
 	main()
