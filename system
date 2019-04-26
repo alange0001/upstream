@@ -1,68 +1,207 @@
 #!/usr/bin/env python3
 
+import os
+import sys
+import time
+import mmap
 import psutil
+import argparse
 import datetime
 import collections
-import time
-import argparse
 import json
-import os
 # libvirt module (imported only with --host)
 libvirt = None
 
-def main():
-	global libvirt
-
-	parser = argparse.ArgumentParser(
-		description="Get system's performance information.")
-	parser.add_argument('-i', '--interval', type=int,
-		default=None,
-		help='interval')
-	parser.add_argument('--host',
-		default=False, action='store_true',
-		help='is a host machine (VMM)')
-	parser.add_argument('-f', '--fields', type=str,
-		default=None, nargs='+',
-		help='list of fields to show')
-	args = parser.parse_args()
-	#print(args)
-	if args.interval == None or args.interval <= 0:
-		args.interval = 1
-
-	if args.host:
-		import libvirt as _libvirt
-		libvirt = _libvirt
-
-	st = Stat(args)
-	st.getData()
-	while True:
-		time.sleep(args.interval)
-		print(st.getLine())
-
-	return 0
+from util import max_round
 
 class Stat:
 	# Class control
-	fields  = None
+	args    = None
 	is_host = False
-	# Format control
-	'''columns = None
-	format_line = None'''
 	# System's information
 	cpus = None
 	libvirt_conn = None
-	# Last time
-	last_time = None
-	# Last cpu stats
-	last_host_stats = None
-	last_vms_stats = None
 
-	def __init__(self, args):
+	def __init__(self):
+		global libvirt
+
+		parser = argparse.ArgumentParser(
+			description="Get system's performance information.")
+		parser.add_argument('-i', '--interval', type=int,
+			default=None,
+			help='interval')
+		parser.add_argument('--host',
+			default=False, action='store_true',
+			help='is a host machine (VMM)')
+		parser.add_argument('-e', '--export-dir', type=str,
+			default=None,
+			help='directory used to export information to the guests (implies --host)')
+		self.args = parser.parse_args()
+		#print(args)
+
+		if self.args.interval == None or self.args.interval <= 0:
+			self.args.interval = 1
+
+		if self.args.export_dir != None:
+			self.args.host = True
+			if not os.path.isdir(self.args.export_dir):
+				raise Exception('parameter --export-dir="{}" is not a directory'.format(self.args.export_dir))
+
+		if self.args.host:
+			import libvirt as _libvirt
+			libvirt = _libvirt
+
 		self.cpus = psutil.cpu_count()
-		if isinstance(args.fields, list) and len(args.fields) > 0: self.fields = args.fields
-		self.is_host = args.host
+		self.is_host = self.args.host
 		if self.is_host:
 			self.libvirt_conn = libvirt.open('qemu:///system')
+
+	def main(self):
+		if self.args.export_dir != None:
+			count = 0
+
+			stats_d = collections.OrderedDict()
+			stats_d[1] = stats_d[60] = stats_d[300] = stats_d[600] = self.collectStats()
+
+			while True:
+				time.sleep(1)
+				curr = self.collectStats()
+				count += 1
+
+				processed_d = collections.OrderedDict()
+
+				for i, stats in stats_d.items():
+					if (count % i) == 0:
+						processed_d[i] = self.processStats(stats_d[i], curr)
+						stats_d[i] = curr
+
+				if len(processed_d):
+					print(json.dumps(processed_d[1]))
+					self.saveStatVMs(processed_d)
+		else:
+			last = self.collectStats()
+			while True:
+				time.sleep(self.args.interval)
+				curr = self.collectStats()
+				print(json.dumps(self.processStats(last, curr)))
+				last = curr
+
+		return 0
+
+	_logFiles_ = dict()
+	def saveStatVMs(self, processed_d):
+		for interval, stats in processed_d.items():
+			if stats == None: continue
+
+			for vm_name, vm in stats['vm'].items():
+				dir = '{}/{}'.format(self.args.export_dir, vm_name)
+				if not os.path.isdir(dir):
+					os.mkdir(dir)
+
+				save = stats.copy()
+				del save['vm']
+				save['vm'] = stats['vm'][vm_name]
+
+				file_name = '{}/stats-{}'.format(dir, interval)
+				file_obj = self._logFiles_.get(file_name)
+				if file_obj == None:
+					self._logFiles_[file_name] = file_obj = LogFile(file_name, 10, 15)
+				file_obj.writeLine('{}\n'.format(json.dumps(save)))
+
+	def processStats(self, last_stats, current_stats):
+		delta_time = current_stats['time'] - last_stats['time']
+
+		ret = collections.OrderedDict()
+		ret['time'] = datetime.datetime.now().strftime('%s')
+		ret['cpu_count'] = self.cpus
+		ret['cpu'] = []
+		for i in range(0,self.cpus):
+			data_cpu = collections.OrderedDict()
+			ret['cpu'].append(data_cpu)
+
+			last_times_i = last_stats['host']['times'][i]
+			curr_times_i = current_stats['host']['times'][i]
+
+			data_cpu['total']          = max_round((int(current_stats['host']['cpuacct'][i]) - int(last_stats['host']['cpuacct'][i]))/(delta_time * 10000000), 100, 2)
+			data_cpu['user']           = max_round(100 * (curr_times_i.user - last_times_i.user) / delta_time, 100, 2)
+			data_cpu['system']         = max_round(100 * (curr_times_i.system - last_times_i.system) / delta_time, 100, 2)
+			data_cpu['nice']           = max_round(100 * (curr_times_i.nice - last_times_i.nice) / delta_time, 100, 2)
+			data_cpu['idle']           = max_round(100 * (curr_times_i.idle - last_times_i.idle) / delta_time, 100, 2)
+			data_cpu['iowait']         = max_round(100 * (curr_times_i.iowait - last_times_i.iowait) / delta_time, 100, 2)
+			data_cpu['irq']            = max_round(100 * (curr_times_i.irq - last_times_i.irq) / delta_time, 100, 2)
+			data_cpu['softirq']        = max_round(100 * (curr_times_i.softirq - last_times_i.softirq) / delta_time, 100, 2)
+			data_cpu['steal']          = max_round(100 * (curr_times_i.steal - last_times_i.steal) / delta_time, 100, 2)
+			data_cpu['guest']          = max_round(100 * (curr_times_i.guest - last_times_i.guest) / delta_time, 100, 2)
+			data_cpu['guest_nice']     = max_round(100 * (curr_times_i.guest_nice - last_times_i.guest_nice) / delta_time, 100, 2)
+			if current_stats['host']['freq'] != None:
+				freq_i = current_stats['host']['freq'][i]
+				data_cpu['freq_current'] = freq_i.current
+				data_cpu['freq_min']     = freq_i.min
+				data_cpu['freq_max']     = freq_i.max
+
+		if self.is_host:
+			ret['vm'] = collections.OrderedDict()
+			for vm_name, vm in current_stats['vms'].items():
+				vm_old = last_stats['vms'].get(vm_name)
+
+				ret['vm'][vm_name] = ret_vm = collections.OrderedDict()
+				ret_vm['vcpu_count'] = vm['vcpu_count']
+				ret_vm['vcpu'] = []
+
+				for i in range(0,vm['vcpu_count']):
+					vm_vcpu = collections.OrderedDict()
+					ret_vm['vcpu'].append(vm_vcpu)
+
+					vm_vcpu['map']   = vm['vcpus'][1][i]
+					if vm_old != None:
+						vm_vcpu['usage'] = max_round(
+							(int(vm['cpuacct'][i]['total']) - int(vm_old['cpuacct'][i]['total'])) /
+							(delta_time * 10000000)
+							, 100, 2)
+						vm_vcpu['usage_percpu'] = vm_vcpu_usage_percpu = []
+						for j in range(0,self.cpus):
+							vm_vcpu_usage_percpu.append(
+								# percent of cpu usage (cpuacct in nanoseconds)
+								max_round(
+									(int(vm['cpuacct'][i]['percpu'][j]) - int(vm_old['cpuacct'][i]['percpu'][j])) /
+									(delta_time * 10000000)
+									, 100, 2)
+								)
+						# using runqueue time:
+						vm_vcpu['steal'] = max_round(
+							(int(vm['proc']['sched'][i][1]) - int(vm_old['proc']['sched'][i][1])) /
+							(delta_time * 10000000)
+							, 100, 2)
+
+		return ret
+
+	def collectStats(self):
+		ret = collections.OrderedDict()
+		ret['time']     = time.time()
+		ret['host']     = host = collections.OrderedDict()
+		host['times']   = psutil.cpu_times(percpu=True)
+		host['cpuacct'] = self.readFile('/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage_percpu').replace('\n', '').split(' ')[0:self.cpus]
+		host['freq']    = psutil.cpu_freq(percpu=True)
+		if len(host['freq']) == 0: host['freq'] = None
+
+		if self.is_host:
+			host['libvirt'] = host_libvirt = []
+			for i in range(0,self.cpus):
+				host_libvirt.append(self.libvirt_conn.getCPUStats(i))
+
+			ret['vms'] = vms_stats = collections.OrderedDict()
+			domains = self.libvirt_conn.listAllDomains()
+			for dom in domains:
+				if dom.isActive() == 0: continue
+				name = dom.name()
+				vcpus = dom.vcpus()
+				vms_stats[name] = vm = collections.OrderedDict()
+				vm['vcpu_count']     = len(vcpus[0])
+				vm['vcpus']          = vcpus
+				vm['cpuacct']        = self.getCpuacct(name, vm['vcpu_count'])
+				vm['proc']           = self.getProc(name, vm['vcpu_count'])
+
+		return ret
 
 	__findCpuacctVM_cache = dict()
 	def findCpuacctVM(self, vm_name):
@@ -94,143 +233,16 @@ class Stat:
 	def getProc(self, vm_name, vcpus):
 		vm_acct_dir = self.findCpuacctVM(vm_name)
 		ret = collections.OrderedDict()
-		ret['stat']  = ret_stat  = []
+		#ret['stat']  = ret_stat  = []  # not using /proc/<pid>/stat
 		ret['sched'] = ret_sched = []
 		for i in range(0,vcpus):
 			# Getting vCPU thread ID:
 			threadId = self.readFile('{}/vcpu{}/tasks'.format(vm_acct_dir, i)).replace('\n', '')
-			stat = self.readFile('/proc/{}/stat'.format(threadId)).replace('\n', '').split(' ')
+			#stat = self.readFile('/proc/{}/stat'.format(threadId)).replace('\n', '').split(' ')
 			sched = self.readFile('/proc/{}/schedstat'.format(threadId)).replace('\n', '').split(' ')
-			ret_stat.append(stat)
+			#ret_stat.append(stat)
 			ret_sched.append(sched)
 		return ret
-
-	def getData(self):
-		### Collecting stats: ###
-		cur_time      = time.time()
-		percent       = psutil.cpu_percent(percpu=True)
-		times_percent = psutil.cpu_times_percent(percpu=True)
-		freq          = psutil.cpu_freq(percpu=True)
-		if len(freq) == 0: freq = None
-
-		if self.is_host:
-			host_stats = collections.OrderedDict()
-			host_stats['libvirt'] = []
-			for i in range(0,self.cpus):
-				host_stats['libvirt'].append(self.libvirt_conn.getCPUStats(i))
-			host_stats['cpuacct'] = self.readFile('/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage_percpu').replace('\n', '').split(' ')[0:self.cpus]
-
-			vms_stats = collections.OrderedDict()
-			domains = self.libvirt_conn.listAllDomains()
-			for dom in domains:
-				if dom.isActive() == 0: continue
-				name = dom.name()
-				vcpus = dom.vcpus()
-				vms_stats[name] = vm = collections.OrderedDict()
-				vm['vcpu_count']     = len(vcpus[0])
-				vm['vcpus']          = vcpus
-				vm['cpuacct']        = self.getCpuacct(name, vm['vcpu_count'])
-				vm['proc']           = self.getProc(name, vm['vcpu_count'])
-
-		### Organizing output: ###
-		data = collections.OrderedDict()
-		data['time'] = datetime.datetime.now().strftime('%s')
-		data['cpu_count'] = self.cpus
-		data['cpu'] = []
-		for i in range(0,self.cpus):
-			#times_percent_i = times_percent[i]
-			data_cpu        = collections.OrderedDict()
-			data['cpu'].append(data_cpu)
-			data_cpu['percent']        = percent[i]
-			#data_cpu['user']          = times_percent_i.user
-			#data_cpu['nice']          = times_percent_i.nice
-			#data_cpu['system']        = times_percent_i.system
-			#data_cpu['idle']          = times_percent_i.idle
-			#data_cpu['iowait']        = times_percent_i.iowait
-			#data_cpu['irq']           = times_percent_i.irq
-			#data_cpu['softirq']       = times_percent_i.softirq
-			#data_cpu['steal']         = times_percent_i.steal
-			#data_cpu['guest']         = times_percent_i.guest
-			#data_cpu['guest_nice']    = times_percent_i.guest_nice
-			if freq != None:
-				freq_i = freq[i]
-				data_cpu['freq_current'] = freq_i.current
-				data_cpu['freq_min']     = freq_i.min
-				data_cpu['freq_max']     = freq_i.max
-
-		if self.is_host:
-			#data['host_stats']  = host_stats
-			#data['vms_stats']   = vms_stats
-
-			if self.last_host_stats != None:
-				data['elapsed_time'] = (cur_time - self.last_time)
-				data['vm'] = collections.OrderedDict()
-				for vm_name, vm in vms_stats.items():
-					vm_old = self.last_vms_stats.get(vm_name)
-
-					data['vm'][vm_name] = vm_data = collections.OrderedDict()
-					vm_data['vcpu_count'] = vm['vcpu_count']
-					vm_data['vcpus'] = []
-
-					for i in range(0,vm['vcpu_count']):
-						vm_vcpu = collections.OrderedDict()
-						vm_data['vcpus'].append(vm_vcpu)
-						vm_vcpu['map']   = vm['vcpus'][1][i]
-						#wrong
-						if vm_old != None:
-							vm_vcpu['usage'] = round(
-								(int(vm['cpuacct'][i]['total']) - int(vm_old['cpuacct'][i]['total'])) /
-								((cur_time - self.last_time) * 10000000)
-								, 2)
-							vm_vcpu['usage_percpu'] = vm_vcpu_usage_percpu = []
-							for j in range(0,self.cpus):
-								vm_vcpu_usage_percpu.append(
-									# percent of cpu usage (cpuacct in nanoseconds)
-									round(
-										(int(vm['cpuacct'][i]['percpu'][j]) - int(vm_old['cpuacct'][i]['percpu'][j])) /
-										((cur_time - self.last_time) * 10000000)
-										, 2)
-									)
-							# using runqueue time:
-							vm_vcpu['steal'] = round(
-								(int(vm['proc']['sched'][i][1]) - int(vm_old['proc']['sched'][i][1])) /
-								((cur_time - self.last_time) * 10000000)
-								, 2)
-
-			self.last_host_stats  = host_stats
-			self.last_vms_stats   = vms_stats
-
-		self.last_time = cur_time
-		return data
-
-	'''def getColumns(self):
-		if self.columns == None:
-			data = self.getData()
-			if self.fields != None:
-				fields = []
-				for i in self.fields:
-					if i not in data.keys(): raise Exception('field "{}" not found'.format(i))
-					fields.append(i)
-			else:
-				fields = list(data.keys())
-			l = []
-			for i in range(0,len(fields)): l.append('{}')
-			self.format_line = '; '.join(l)
-			self.columns = fields
-			self.header = '#' + self.format_line.format(*self.columns)
-		return self.columns
-
-	def getHeader(self):
-		self.getColumns()
-		return self.header'''
-
-	def getLine(self):
-		return json.dumps(self.getData())
-		'''columns = self.getColumns()
-		values = []
-		for i in columns:
-			values.append(data[i])
-		return self.format_line.format(*values)'''
 
 	def readFile(self, file):
 		f = open(file, 'r')
@@ -240,5 +252,54 @@ class Stat:
 			f.close()
 		return ret
 
+class LogFile:
+	lines = 0
+	max_lines = \
+	min_lines = None
+
+	file = \
+	mmap = None
+
+	def __init__(self, name, min_lines, max_lines):
+		assert isinstance(max_lines, int) and max_lines > 5
+		assert isinstance(min_lines, int) and min_lines > 5 and max_lines >= min_lines
+		self.max_lines = max_lines
+		self.min_lines = min_lines
+
+		self.file = open(name, 'w+')
+		assert self.file != None, 'unable to open the file'
+		self.file.truncate(5)
+		self.mmap = mmap.mmap(self.file.fileno(), 0)
+
+	def __del__(self):
+		self.mmap.close()
+		self.file.close()
+
+	def writeLine(self, line):
+		mm = self.mmap
+		if self.lines > self.max_lines:
+			reduced = self.truncate()
+			mm.seek( mm.size() - reduced )
+
+		b = line.encode()
+		self.lines += 1
+
+		mm.resize( mm.size() + len(b) )
+		mm.write(b)
+		mm.flush()
+
+	def truncate(self):
+		mm = self.mmap
+		mm.seek(0)
+
+		size = 0
+		for i in range(0, self.lines - self.min_lines):
+			size += len(mm.readline())
+
+		mm.move(0, size, mm.size()-size)
+
+		# reduced size in bytes
+		return size
+
 if __name__ == '__main__':
-	exit(main())
+	exit(Stat().main())

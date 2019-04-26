@@ -10,17 +10,19 @@ import collections
 import zlib
 import os
 
-sc_clk_tck = os.sysconf(os.sysconf_names['SC_CLK_TCK'])
+from util import max_round
 
 class Load:
 	# Command parameters and options
 	parser  = None
 	options = None
-
-	pid = None
+	# Output control
 	first_line = True
-	last_time = None
+	# Process and stats information
+	pid       = None
 	process   = None
+	last_time = None
+	last_stat = None
 
 	def __init__(self):
 		self.parser = argparse.ArgumentParser(
@@ -41,7 +43,8 @@ class Load:
 			default=False, action='store_true',
 			help='infinite loops')
 
-		self.pid = os.getpid()
+		self.pid     = os.getpid()
+		self.process = psutil.Process(self.pid)
 
 	def main(self):
 		self.options = self.parser.parse_args()
@@ -51,7 +54,8 @@ class Load:
 			self.options.files = [None]
 
 		self.last_time = time.time()
-		self.process   = psutil.Process(self.pid)
+		self.last_stat = self.process.cpu_times()
+
 		count = 0
 		while True:
 			for i in self.options.files:
@@ -78,48 +82,45 @@ class Load:
 			f = open(file, 'rb')
 			zlib.compress(f.read())
 			f.close()
+
 		cur_time = time.time()
+		cpu_total = self.process.cpu_percent()
 		cpu_times = self.process.cpu_times()
 		delta_time = cur_time - self.last_time
+
 		ret['time'] = datetime.datetime.now().strftime('%s')
 		ret['elapsed_time']    = round(delta_time, 3)
-		ret['total']           = 0
-		ret['user']            = cpu_times.user
-		ret['system']          = cpu_times.system
-		ret['children_user']   = cpu_times.children_user
-		ret['children_system'] = cpu_times.children_system
-		ret['total']           = ret['user'] + ret['system'] + ret['children_user'] + ret['children_system']
+		ret['total']           = max_round(cpu_total, 100, 2)
+		ret['user']            = max_round(100* (cpu_times.user - self.last_stat.user)/(cur_time - self.last_time), 100, 2)
+		ret['system']          = max_round(100* (cpu_times.system - self.last_stat.system)/(cur_time - self.last_time), 100, 2)
+		ret['children_user']   = max_round(100* (cpu_times.children_user - self.last_stat.children_user)/(cur_time - self.last_time), 100, 2)
+		ret['children_system'] = max_round(100* (cpu_times.children_system - self.last_stat.children_system)/(cur_time - self.last_time), 100, 2)
+
 		self.last_time = cur_time
-		#self.last_stat = cur_stat
+		self.last_stat = cpu_times
 		return ret
 
 	def executeCommand(self, file):
 		ret = collections.OrderedDict()
 		cmd = self.options.command.replace('%f', file) if file != None else self.options.command
 		cmd_list = shlex.split(cmd)
-		time_start = time.time()
 		p = psutil.Popen(cmd_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		time_start = time.time()
 		while True:
 			time.sleep(0.01)
 			cpu_times = p.cpu_times()
+			time_end = time.time()
 			if p.poll() != None:
 				break
-		time_end = time.time()
 		ret['time']            = datetime.datetime.now().strftime('%s')
 		ret['elapsed_time']    = round(time_end - time_start, 3)
-		ret['total']           = round(((cpu_times.user + cpu_times.system)/(time_end - time_start))*100, 2)
-		ret['user']            = cpu_times.user
-		ret['system']          = cpu_times.system
-		ret['children_user']   = cpu_times.children_user
-		ret['children_system'] = cpu_times.children_system
+		ret['total']           = 0
+		ret['user']            = max_round(100* cpu_times.user / (time_end - time_start), 100, 2)
+		ret['system']          = max_round(100* cpu_times.system / (time_end - time_start), 100, 2)
+		ret['children_user']   = max_round(100* cpu_times.children_user / (time_end - time_start), 100, 2)
+		ret['children_system'] = max_round(100* cpu_times.children_system / (time_end - time_start), 100, 2)
+		ret['total']           = max_round(ret['user'] + ret['system'] + ret['children_user'] + ret['children_system'], 100, 2)
 		return ret
-
-	'''def getProcStat(self):
-		#SEE: man 5 proc
-		f = open('/proc/{}/stat'.format(self.pid), 'r')
-		s = f.readline().replace('\n','').split(' ')
-		f.close()
-		return s'''
 
 if __name__ == '__main__':
 	exit(Load().main())
