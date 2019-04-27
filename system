@@ -3,7 +3,6 @@
 import os
 import sys
 import time
-import mmap
 import psutil
 import argparse
 import datetime
@@ -12,7 +11,7 @@ import json
 # libvirt module (imported only with --host)
 libvirt = None
 
-from util import max_round
+from util import max_round, LogFile
 
 class Stat:
 	# Class control
@@ -251,55 +250,6 @@ class Stat:
 		finally:
 			f.close()
 		return ret
-
-class LogFile:
-	lines = 0
-	max_lines = \
-	min_lines = None
-
-	file = \
-	mmap = None
-
-	def __init__(self, name, min_lines, max_lines):
-		assert isinstance(max_lines, int) and max_lines > 5
-		assert isinstance(min_lines, int) and min_lines > 5 and max_lines >= min_lines
-		self.max_lines = max_lines
-		self.min_lines = min_lines
-
-		self.file = open(name, 'w+')
-		assert self.file != None, 'unable to open the file'
-		self.file.truncate(5)
-		self.mmap = mmap.mmap(self.file.fileno(), 0)
-
-	def __del__(self):
-		self.mmap.close()
-		self.file.close()
-
-	def writeLine(self, line):
-		mm = self.mmap
-		if self.lines > self.max_lines:
-			reduced = self.truncate()
-			mm.seek( mm.size() - reduced )
-
-		b = line.encode()
-		self.lines += 1
-
-		mm.resize( mm.size() + len(b) )
-		mm.write(b)
-		mm.flush()
-
-	def truncate(self):
-		mm = self.mmap
-		mm.seek(0)
-
-		size = 0
-		for i in range(0, self.lines - self.min_lines):
-			size += len(mm.readline())
-
-		mm.move(0, size, mm.size()-size)
-
-		# reduced size in bytes
-		return size
 
 if __name__ == '__main__':
 	exit(Stat().main())
