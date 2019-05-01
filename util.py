@@ -1,60 +1,120 @@
 #!/usr/bin/env python3
 
-import mmap
+import collections
+import json
 
 def max_round(value, max, decimals):
-    return max if value > max else round(value, decimals)
+	return max if value > max else round(value, decimals)
+
+def coalesce(*args):
+	for i in args:
+		if i != None:
+			return i
+	return None
 
 class LogFile:
-	lines = 0
-	max_lines = \
-	min_lines = None
+	_file = \
+	_format = None
+	_close_file = True
 
-	file = \
-	mmap = None
-	init_size = 5
-
-	def __init__(self, name, min_lines, max_lines):
-		assert isinstance(max_lines, int) and max_lines > 5
-		assert isinstance(min_lines, int) and min_lines > 5 and max_lines >= min_lines
-		self.max_lines = max_lines
-		self.min_lines = min_lines
-
-		self.file = open(name, 'w+')
-		assert self.file != None, 'unable to open the file'
-		self.file.truncate(self.init_size)
-		self.mmap = mmap.mmap(self.file.fileno(), 0)
-		self.mmap.seek(0)
+	def __init__(self, file, format):
+		assert format in ['csv', 'json']
+		self._format = format
+		if isinstance(file, str):
+			self._file = open(file, 'w')
+			assert self._file != None, 'unable to open the file "{}"'.format(file)
+		else:
+			self._file = file
+			self._close_file = False
 
 	def __del__(self):
-		self.mmap.close()
-		self.file.close()
+		if self._close_file:
+			self._file.close()
 
-	def writeLine(self, line):
-		mm = self.mmap
-		reduced = 0
-		if self.lines > self.max_lines:
-			reduced = self.truncate()
-			mm.seek( mm.size() - reduced )
+	def write(self, data):
+		self._file.write(self._formatLine(data))
+		self._file.flush()
 
-		b = line.encode()
-		self.lines += 1
+	_firstLine = True
+	def _formatLine(self, data):
+		if self._format == 'json':
+			return '{}\n'.format(json.dumps(data))
+		elif self._format == 'csv':
+			ret = ''
+			if self._firstLine:
+				self._firstLine = False
+				ret = '#{}\n'.format('; '.join(self._getCSVHeader(None, data)))
+			ret += '{}\n'.format('; '.join(self._getCSVLine(data)))
+			return ret
 
-		mm.resize( mm.size() - self.init_size - reduced + len(b) )
-		mm.write(b)
-		mm.flush()
-		self.init_size = 0
+	def _getCSVHeader(self, prefix, data):
+		ret = []
+		if isinstance(data, list) or isinstance(data, tuple):
+			for i in range(0, len(data)):
+				prefix_i = '{}_{}'.format(prefix, i) if prefix != None else i
+				ret_i = self._getCSVHeader(prefix_i, data[i])
+				ret.extend(ret_i)
+		elif isinstance(data, dict) or isinstance(data, collections.OrderedDict):
+			for k, v in data.items():
+				prefix_i = '{}_{}'.format(prefix, k) if prefix != None else k
+				ret_i = self._getCSVHeader(prefix_i, v)
+				ret.extend(ret_i)
+		else:
+			return [prefix]
+		return ret
 
-	def truncate(self):
-		mm = self.mmap
+	def _getCSVLine(self, data):
+		ret = []
+		if isinstance(data, list) or isinstance(data, tuple):
+			for v in data:
+				ret.extend(self._getCSVLine(v))
+		elif isinstance(data, dict) or isinstance(data, collections.OrderedDict):
+			for v in data.values():
+				ret.extend(self._getCSVLine(v))
+		else:
+			return [str(data)]
+		return ret
 
-		mm.seek(0)
-		size = 0
-		for i in range(0, self.lines - self.min_lines):
-			size += len(mm.readline())
+class WatchLog:
+	_file = \
+	_format = \
+	_file_name = None
 
-		mm.move(0, size, mm.size()-size)
-		self.lines = self.min_lines
+	_header_size = 0
+	_header = []
+	_lines = []
 
-		# reduced size in bytes
-		return size
+	def __init__(self, file, format):
+		assert format in ['csv', 'json']
+		self._format = format
+
+		self._file_name = file
+		self._file = open(file, 'r')
+		assert self._file != None, 'unable to open the file "{}"'.format(file)
+
+	def __del__(self):
+		self._file.close()
+
+	def read(self):
+		lines = self._file.readlines()
+		if self._format == 'csv':
+			if len(self._header) == 0 and lines[0][0] == '#':
+				self._header = lines[0].replace('\n', '').split('; ')
+				self._header[0] = self._header[0].replace('#', '')
+				self._header_size = len(self._header)
+				del lines[0]
+			for i in lines:
+				line_list = i.replace('\n', '').split('; ')
+				line_dir  = collections.OrderedDict()
+				self._lines.append(line_dir)
+				for j in range(0, self._header_size):
+					line_dir[self._header[j]] = line_list[j]
+		else: # json
+			for i in lines:
+				i = i.replace('\n', '')
+				self._lines.append(json.loads(i))
+
+	def lines(self):
+		return self._lines
+	def header(self):
+		return self._header

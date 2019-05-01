@@ -7,11 +7,10 @@ import psutil
 import argparse
 import datetime
 import collections
-import json
 # libvirt module (imported only with --host)
 libvirt = None
 
-from util import max_round, LogFile
+from util import max_round, coalesce, LogFile
 
 class Stat:
 	# Class control
@@ -35,6 +34,9 @@ class Stat:
 		parser.add_argument('-e', '--export-dir', type=str,
 			default=None,
 			help='directory used to export information to the guests (implies --host)')
+		parser.add_argument('-f', '--format', type=str,
+			default='csv', choices=[ 'csv', 'json' ],
+			help='output format')
 		self.args = parser.parse_args()
 		#print(args)
 
@@ -56,6 +58,7 @@ class Stat:
 			self.libvirt_conn = libvirt.open('qemu:///system')
 
 	def main(self):
+		log = LogFile(sys.stdout, self.args.format)
 		if self.args.export_dir != None:
 			count = 0
 
@@ -75,20 +78,22 @@ class Stat:
 						stats_d[i] = curr
 
 				if len(processed_d):
-					print(json.dumps(processed_d[1]))
-					self.saveStatVMs(processed_d)
+					log.write(processed_d[1])
+					self.writePerVM(processed_d)
 		else:
 			last = self.collectStats()
 			while True:
 				time.sleep(self.args.interval)
 				curr = self.collectStats()
-				print(json.dumps(self.processStats(last, curr)))
+				log.write(self.processStats(last, curr))
 				last = curr
 
 		return 0
 
 	_logFiles_ = dict()
-	def saveStatVMs(self, processed_d):
+	def writePerVM(self, processed_d):
+		assert self.args.export_dir != None
+
 		for interval, stats in processed_d.items():
 			if stats == None: continue
 
@@ -104,8 +109,8 @@ class Stat:
 				file_name = '{}/stats-{}'.format(dir, interval)
 				file_obj = self._logFiles_.get(file_name)
 				if file_obj == None:
-					self._logFiles_[file_name] = file_obj = LogFile(file_name, 10, 15)
-				file_obj.writeLine('{}\n'.format(json.dumps(save)))
+					self._logFiles_[file_name] = file_obj = LogFile(file_name, self.args.format)
+				file_obj.write(save)
 
 	def processStats(self, last_stats, current_stats):
 		delta_time = current_stats['time'] - last_stats['time']
@@ -232,7 +237,7 @@ class Stat:
 	def getProc(self, vm_name, vcpus):
 		vm_acct_dir = self.findCpuacctVM(vm_name)
 		ret = collections.OrderedDict()
-		#ret['stat']  = ret_stat  = []  # not using /proc/<pid>/stat
+		#ret['stat']  = ret_stat = []  # not using /proc/<pid>/stat
 		ret['sched'] = ret_sched = []
 		for i in range(0,vcpus):
 			# Getting vCPU thread ID:
@@ -245,6 +250,7 @@ class Stat:
 
 	def readFile(self, file):
 		f = open(file, 'r')
+		assert f != None, 'unable to open the file "{}"'.format(file)
 		try:
 			ret = ''.join(f.readlines())
 		finally:
