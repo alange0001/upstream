@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+
+import numpy
+
+class Program:
+	def __init__(self):
+		pass
+
+	def main(self):
+		return 0
+
+class MarkovChain:
+	_size   = None # Matrix size
+	_names  = None # State names
+	_counts = None # Line sum
+	_matrix = None # Markov chain's matrix
+
+	def __init__(self, size, names=None):
+		assert isinstance(size, int) and size > 1
+		assert names == None or (isinstance(names, list) and len(names) == size)
+		self._size = size
+		self._names = names
+		self._counts = [ 0 for i in range(0,size) ]
+		self._matrix = numpy.array( [ [ 0 for j in range(0,size) ] for i in range(0,size) ] )
+
+	def getMatrix(self):
+		ret = numpy.array( [ [ 0. for j in range(0,self._size) ] for i in range(0,self._size) ] )
+		for i in range(0,self._size):
+			ret[i] = self._matrix[i]/self._counts[i] if self._counts[i] > 0 else [1. for j in range(0,self._size)]
+		return ret
+
+	def predict(self, states):
+		return states * self.getMatrix()
+
+	def increment(self, state_from, state_to):
+		self._counts[state_from] += 1
+		self._matrix[state_from][state_to] += 1
+
+if __name__ == '__main__':
+	exit(Program().main())
