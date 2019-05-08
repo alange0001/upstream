@@ -10,7 +10,7 @@ import collections
 # libvirt module (imported only with --host)
 libvirt = None
 
-from util import max_round, coalesce, LogFile
+from util import max_round, LogFile
 
 class Stat:
 	# Class control
@@ -35,7 +35,7 @@ class Stat:
 			default=None,
 			help='directory used to export information to the guests (implies --host)')
 		parser.add_argument('-f', '--format', type=str,
-			default='csv', choices=[ 'csv', 'json' ],
+			default='json', choices=[ 'csv', 'json' ],
 			help='output format')
 		self.args = parser.parse_args()
 		#print(args)
@@ -144,6 +144,7 @@ class Stat:
 				data_cpu['freq_max']     = freq_i.max
 
 		if self.is_host:
+			ret['vm_totals'] = collections.OrderedDict()
 			ret['vm'] = collections.OrderedDict()
 			for vm_name, vm in current_stats['vms'].items():
 				vm_old = last_stats['vms'].get(vm_name)
@@ -176,7 +177,7 @@ class Stat:
 							(int(vm['proc']['sched'][i][1]) - int(vm_old['proc']['sched'][i][1])) /
 							(delta_time * 10000000)
 							, 100, 2)
-
+			ret['vm_totals']['vcpu_count'] = sum( [ ret['vm'][i]['vcpu_count'] for i in ret['vm'].keys() ] )
 		return ret
 
 	def collectStats(self):
