@@ -1,25 +1,77 @@
 #!/usr/bin/env python3
 
 import numpy
+import argparse
+import time
+import os
+import sys
 
 class Program:
+	_args = None
+
 	def __init__(self):
-		pass
+		parser = argparse.ArgumentParser(
+			description="Guest model.")
+		parser.add_argument('-d', '--stats-dir', type=str,
+			default=None, required=True,
+			help='directory of statistics provided by the host')
+		self._args = parser.parse_args()
+		#print(self._args)
 
 	def main(self):
+		try:
+			if not os.path.isdir(self._args.stats_dir): raise Exception('parameter --stats-dir="{}" not found a directory'.format(self._args.stats_dir))
+			stats1 = util.WatchLog('{}/stats-1', 'json')
+			model1 = Model()
+
+			while True:
+				time.sleep(1)
+				lines = stats1.read()
+				for l in lines:
+					model1.feed(l)
+
+		# Exit conditions:
+		except KeyboardInterrupt as e:
+			return 0
+		except Exception as e:
+			sys.stderr.write('error: {}\n'.format(str(e)))
+			return 1
 		return 0
+
+class Model:
+	cpus         = None
+	# Time Serie Values:
+	sample_size   = 0
+	total_time    = []   # cpu time
+	total_demand  = None # cpu time + steal time of all VMs (Markov Chain)
+	total_vcpus   = []   # number of VCPUs of all VMs
+	vcpu_percent  = []
+	vcpu_steal    = []
+
+	def __init__(self):
+		self.total_demand = MarkovChain(10, sample_limit=300)
+
+	def feed(self, line):
+		self.sample_size += 1
+		if self.cpus = None: self.cpus = line['cpu_count']
 
 class MarkovChain:
 	_size   = None # Matrix size
 	_names  = None # State names
 	_counts = None # Line sum
-	_matrix = None # Markov chain's matrix
+	_matrix = None # Transition matrix
+	_sample_limit = 0
+	_sample_size  = 0
+	_sample = []
+	_last_state = None
 
-	def __init__(self, size, names=None):
+	def __init__(self, size, names=None, sample_limit=0):
 		assert isinstance(size, int) and size > 1
 		assert names == None or (isinstance(names, list) and len(names) == size)
+		assert isinstance(sample_limit, int) and sample_limit >= 0
 		self._size = size
 		self._names = names
+		self._sample_limit = sample_limit
 		self._counts = [ 0 for i in range(0,size) ]
 		self._matrix = numpy.array( [ [ 0 for j in range(0,size) ] for i in range(0,size) ] )
 
@@ -29,12 +81,48 @@ class MarkovChain:
 			ret[i] = self._matrix[i]/self._counts[i] if self._counts[i] > 0 else [1. for j in range(0,self._size)]
 		return ret
 
-	def predict(self, states):
-		return states * self.getMatrix()
+	def predict(self, states, times=1):
+		assert len(states) == self._size
+		assert times > 0
+		m = self.getMatrix()
+		ret = states
+		for i in range(0,times):
+			ret = ret * m
+		return ret
 
-	def increment(self, state_from, state_to):
-		self._counts[state_from] += 1
-		self._matrix[state_from][state_to] += 1
+	def increment(self, *states):
+		assert len(states) in [ 1, 2 ]
+		state_from = self._last_state
+		if len(states) == 2:
+			state_from = states[0]
+			del states[0]
+		state_to = states[0]
+
+		if state_from != None:
+			self._counts[state_from] += 1
+			self._matrix[state_from][state_to] += 1
+			self._sample_size += 1
+			self._sample.append((state_from, state_to))
+
+		self._last_state = state_to
+
+		if self._sample_limit > 0:
+			while self._sample_size > self._sample_limit:
+				self.decrement()
+
+	def decrement(self):
+		if self._sample_size > 0:
+			state_from, state_to = self._sample[0]
+			del self._sample[0]
+			self._sample_size -= 1
+
+			assert self._counts[state_from] > 0
+			assert self._matrix[state_from][state_to] > 0
+			self._counts[state_from] -= 1
+			self._matrix[state_from][state_to] -= 1
+
+	def size(self):
+		return self._sample_size
 
 if __name__ == '__main__':
 	exit(Program().main())

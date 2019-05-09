@@ -9,6 +9,7 @@ import time
 import collections
 import zlib
 import os
+import sys
 
 from util import max_round
 
@@ -43,31 +44,36 @@ class Load:
 			default=False, action='store_true',
 			help='infinite loops')
 
-		self.pid     = os.getpid()
-		self.process = psutil.Process(self.pid)
-
-	def main(self):
 		self.options = self.parser.parse_args()
-		print(self.options)
-
 		if self.options.files == None:
 			self.options.files = [None]
+		#print(self.options)
 
-		self.last_time = time.time()
-		self.last_stat = self.process.cpu_times()
+	def main(self):
+		try:
+			self.pid       = os.getpid()
+			self.process   = psutil.Process(self.pid)
+			self.last_time = time.time()
+			self.last_stat = self.process.cpu_times()
 
-		count = 0
-		while True:
-			for i in self.options.files:
-				if self.options.builtin != None:
-					self.printLine(self.executeBuiltin(i))
-				elif self.options.command != None:
-					self.printLine(self.executeCommand(i))
+			count = 0
+			while True:
+				for i in self.options.files:
+					if self.options.builtin != None:
+						self.printLine(self.executeBuiltin(i))
+					elif self.options.command != None:
+						self.printLine(self.executeCommand(i))
 
-			if self.options.infinite: continue
-			count += 1
-			if count >= self.options.loops: break
+				if self.options.infinite: continue
+				count += 1
+				if count >= self.options.loops: break
 
+		# Exit conditions
+		except KeyboardInterrupt as e:
+			return 0
+		except Exception as e:
+			sys.stderr.write('error: {}\n'.format(str(e)))
+			return 1
 		return 0
 
 	def printLine(self, output):

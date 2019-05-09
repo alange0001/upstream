@@ -76,13 +76,12 @@ class LogFile:
 		return ret
 
 class WatchLog:
-	_file = \
-	_format = \
-	_file_name = None
-
+	_file        = None
+	_format      = None
+	_file_name   = None
 	_header_size = 0
-	_header = []
-	_lines = []
+	_header      = []
+	_lines       = []
 
 	def __init__(self, file, format):
 		assert format in ['csv', 'json']
@@ -96,6 +95,7 @@ class WatchLog:
 		self._file.close()
 
 	def read(self):
+		ret = []
 		lines = self._file.readlines()
 		if self._format == 'csv':
 			if len(self._header) == 0 and lines[0][0] == '#':
@@ -105,14 +105,18 @@ class WatchLog:
 				del lines[0]
 			for i in lines:
 				line_list = i.replace('\n', '').split('; ')
-				line_dir  = collections.OrderedDict()
-				self._lines.append(line_dir)
+				ret_i  = collections.OrderedDict()
+				self._lines.append(ret_i)
+				ret.append(ret_i)
 				for j in range(0, self._header_size):
-					line_dir[self._header[j]] = line_list[j]
+					ret_i[self._header[j]] = line_list[j]
 		else: # json
 			for i in lines:
 				i = i.replace('\n', '')
-				self._lines.append(json.loads(i))
+				ret_i = json.loads(i)
+				self._lines.append(ret_i)
+				ret.append(ret_i)
+		return ret
 
 	def lines(self):
 		return self._lines
