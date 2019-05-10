@@ -92,7 +92,8 @@ class WatchLog:
 		assert self._file != None, 'unable to open the file "{}"'.format(file)
 
 	def __del__(self):
-		self._file.close()
+		if self._file != None:
+			self._file.close()
 
 	def read(self):
 		ret = []

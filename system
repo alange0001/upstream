@@ -88,7 +88,7 @@ class Stat:
 					curr = self.collectStats()
 					log.write(self.processStats(last, curr))
 					last = curr
-		except KeyboardInterrupt as e:
+		except KeyboardInterrupt:
 			return 0
 		except Exception as e:
 			sys.stderr.write('error: {}\n'.format(str(e)))
@@ -150,6 +150,7 @@ class Stat:
 
 		if self.is_host:
 			ret['vm_totals'] = collections.OrderedDict()
+			vm_totals_steal = 0
 			ret['vm'] = collections.OrderedDict()
 			for vm_name, vm in current_stats['vms'].items():
 				vm_old = last_stats['vms'].get(vm_name)
@@ -178,11 +179,13 @@ class Stat:
 									, 100, 2)
 								)
 						# using runqueue time:
-						vm_vcpu['steal'] = max_round(
+						vm_vcpu['steal'] = x = max_round(
 							(int(vm['proc']['sched'][i][1]) - int(vm_old['proc']['sched'][i][1])) /
 							(delta_time * 10000000)
 							, 100, 2)
+						vm_totals_steal += x
 			ret['vm_totals']['vcpu_count'] = sum( [ ret['vm'][i]['vcpu_count'] for i in ret['vm'].keys() ] )
+			ret['vm_totals']['steal'] = vm_totals_steal
 		return ret
 
 	def collectStats(self):

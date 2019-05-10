@@ -6,6 +6,8 @@ import time
 import os
 import sys
 
+import util
+
 class Program:
 	_args = None
 
@@ -21,7 +23,7 @@ class Program:
 	def main(self):
 		try:
 			if not os.path.isdir(self._args.stats_dir): raise Exception('parameter --stats-dir="{}" not found a directory'.format(self._args.stats_dir))
-			stats1 = util.WatchLog('{}/stats-1', 'json')
+			stats1 = util.WatchLog('{}/stats-1'.format(self._args.stats_dir), 'json')
 			model1 = Model()
 
 			while True:
@@ -29,31 +31,51 @@ class Program:
 				lines = stats1.read()
 				for l in lines:
 					model1.feed(l)
+					print(model1.predict())
 
 		# Exit conditions:
-		except KeyboardInterrupt as e:
+		except KeyboardInterrupt:
 			return 0
-		except Exception as e:
+		'''except Exception as e:
 			sys.stderr.write('error: {}\n'.format(str(e)))
-			return 1
+			return 1  #'''
 		return 0
 
 class Model:
-	cpus         = None
+	_cpus         = None
 	# Time Serie Values:
-	sample_size   = 0
-	total_time    = []   # cpu time
-	total_demand  = None # cpu time + steal time of all VMs (Markov Chain)
-	total_vcpus   = []   # number of VCPUs of all VMs
-	vcpu_percent  = []
-	vcpu_steal    = []
+	_sample_size   = 0
+	_total_percent = []   # cpu time (normalized by cpus)
+	_total_demand  = None # cpu time + steal time of all VMs (Markov Chain) (normalized by total_vcpus)
+	_total_vcpus   = []   # number of VCPUs of all VMs
+	#_vcpu_percent  = []
+	#_vcpu_steal    = []
 
 	def __init__(self):
-		self.total_demand = MarkovChain(10, sample_limit=300)
+		self._total_demand = MarkovChain(11, sample_limit=300) # 0-10 states
 
 	def feed(self, line):
-		self.sample_size += 1
-		if self.cpus = None: self.cpus = line['cpu_count']
+		self._sample_size += 1
+		if self._cpus == None: self._cpus = line['cpu_count']
+
+		total_percent_aux = sum([ line['cpu'][i]['guest'] for i in range(0,self._cpus) ]) / 100.
+		total_vcpus_aux = line['vm_totals']['vcpu_count']
+		total_demand_aux = total_percent_aux + (line['vm_totals']['steal']/100.)
+		print('total_percent_aux={}, total_vcpus_aux={}, total_demand_aux={}'.format(total_percent_aux, total_vcpus_aux, total_demand_aux))
+
+		self._total_vcpus.append(total_vcpus_aux)
+		self._total_percent.append( total_percent_aux / self._cpus ) # normalized by the number of CPUs
+
+		if total_demand_aux == 0: total_demand_aux = 0.1
+		total_demand_pervcpu = int(round(10* self._cpus / total_demand_aux, 0))
+		print('total_demand_pervcpu={}'.format(total_demand_pervcpu))
+		if total_demand_pervcpu > 10: total_demand_pervcpu = 10
+		self._total_demand.increment(total_demand_pervcpu)
+
+	def predict(self):
+		vcpus = self._total_vcpus[-1]
+		cpus = self._cpus
+		return self._total_demand.predictLast()
 
 class MarkovChain:
 	_size   = None # Matrix size
@@ -78,17 +100,24 @@ class MarkovChain:
 	def getMatrix(self):
 		ret = numpy.array( [ [ 0. for j in range(0,self._size) ] for i in range(0,self._size) ] )
 		for i in range(0,self._size):
-			ret[i] = self._matrix[i]/self._counts[i] if self._counts[i] > 0 else [1. for j in range(0,self._size)]
+			ret[i] = self._matrix[i]/self._counts[i] if self._counts[i] > 0 else [1./self._size for j in range(0,self._size)]
 		return ret
 
 	def predict(self, states, times=1):
 		assert len(states) == self._size
 		assert times > 0
 		m = self.getMatrix()
-		ret = states
+		#print(m)
+		ret = states.copy()
 		for i in range(0,times):
-			ret = ret * m
+			ret = ret @ m
 		return ret
+
+	def predictLast(self):
+		if self._last_state != None:
+			states = numpy.array([ (1 if i == self._last_state else 0) for i in range(0,self._size) ])
+			return self.predict(states)
+		return None
 
 	def increment(self, *states):
 		assert len(states) in [ 1, 2 ]
@@ -97,6 +126,9 @@ class MarkovChain:
 			state_from = states[0]
 			del states[0]
 		state_to = states[0]
+
+		assert state_from == None or (state_from >=0 and state_from < self._size)
+		assert state_to   >=0 and state_to   < self._size
 
 		if state_from != None:
 			self._counts[state_from] += 1
