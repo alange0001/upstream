@@ -15,46 +15,48 @@ from util import max_round
 
 class Load:
 	# Command parameters and options
-	parser  = None
-	options = None
+	options    = None
 	# Output control
 	first_line = True
 	# Process and stats information
-	pid       = None
-	process   = None
-	last_time = None
-	last_stat = None
+	#pid        = None
+	#process    = None
+	#last_time  = None
+	#last_stat  = None
 
 	def __init__(self):
-		self.parser = argparse.ArgumentParser(
+		parser = argparse.ArgumentParser(
 			description="Load the system.")
-		self.parser.add_argument('-b', '--builtin',
+		parser.add_argument('-b', '--builtin',
 			default=None, choices=['zlib'],
 			help='builtin functions')
-		self.parser.add_argument('-c', '--command', type=str,
+		parser.add_argument('-c', '--command', type=str,
 			default=None,
 			help='command (use %%f for to indicate the file)')
-		self.parser.add_argument('-f', '--files', type=str,
+		parser.add_argument('-f', '--files', type=str,
 			default=None, nargs='+',
 			help='list of files to process using the command')
-		self.parser.add_argument('-l', '--loops', type=int,
-			default=1,
-			help='number of loops')
-		self.parser.add_argument('-i', '--infinite',
-			default=False, action='store_true',
-			help='infinite loops')
+		parser.add_argument('-l', '--loops', type=int,
+			default=0,
+			help='number of loops (0 for infinite)')
+		parser.add_argument('-s', '--sleep', type=float,
+			default=0.,
+			help='sleep interval between tasks')
 
-		self.options = self.parser.parse_args()
+		self.options = parser.parse_args()
 		if self.options.files == None:
 			self.options.files = [None]
 		#print(self.options)
 
 	def main(self):
 		try:
-			self.pid       = os.getpid()
-			self.process   = psutil.Process(self.pid)
-			self.last_time = time.time()
-			self.last_stat = self.process.cpu_times()
+			assert self.options.sleep >= 0
+			assert self.options.loops >= 0
+
+			#self.pid       = os.getpid()
+			#self.process   = psutil.Process(self.pid)
+			#self.last_time = time.time()
+			#self.last_stat = self.process.cpu_times()
 
 			count = 0
 			while True:
@@ -64,12 +66,15 @@ class Load:
 					elif self.options.command != None:
 						self.printLine(self.executeCommand(i))
 
-				if self.options.infinite: continue
+					if self.options.sleep > 0:
+						time.sleep(self.options.sleep)
+
+				if self.options.loops == 0: continue
 				count += 1
 				if count >= self.options.loops: break
 
 		# Exit conditions
-		except KeyboardInterrupt as e:
+		except KeyboardInterrupt:
 			return 0
 		except Exception as e:
 			sys.stderr.write('error: {}\n'.format(str(e)))
@@ -83,28 +88,14 @@ class Load:
 		print( '; '.join( [str(i) for i in output.values()] ) )
 
 	def executeBuiltin(self, file):
-		ret = collections.OrderedDict()
+		m = Metrics()
+
 		if self.options.builtin == 'zlib':
 			f = open(file, 'rb')
 			zlib.compress(f.read())
 			f.close()
 
-		cur_time = time.time()
-		cpu_total = self.process.cpu_percent()
-		cpu_times = self.process.cpu_times()
-		delta_time = cur_time - self.last_time
-
-		ret['time'] = datetime.datetime.now().strftime('%s')
-		ret['elapsed_time']    = round(delta_time, 3)
-		ret['total']           = max_round(cpu_total, 100, 2)
-		ret['user']            = max_round(100* (cpu_times.user - self.last_stat.user)/(cur_time - self.last_time), 100, 2)
-		ret['system']          = max_round(100* (cpu_times.system - self.last_stat.system)/(cur_time - self.last_time), 100, 2)
-		ret['children_user']   = max_round(100* (cpu_times.children_user - self.last_stat.children_user)/(cur_time - self.last_time), 100, 2)
-		ret['children_system'] = max_round(100* (cpu_times.children_system - self.last_stat.children_system)/(cur_time - self.last_time), 100, 2)
-
-		self.last_time = cur_time
-		self.last_stat = cpu_times
-		return ret
+		return m.getResults()
 
 	def executeCommand(self, file):
 		ret = collections.OrderedDict()
@@ -126,6 +117,38 @@ class Load:
 		ret['children_user']   = max_round(100* cpu_times.children_user / (time_end - time_start), 100, 2)
 		ret['children_system'] = max_round(100* cpu_times.children_system / (time_end - time_start), 100, 2)
 		ret['total']           = max_round(ret['user'] + ret['system'] + ret['children_user'] + ret['children_system'], 100, 2)
+		return ret
+
+class Metrics:
+	_process        = None
+	_first_time     = None
+	_first_cputimes = None
+
+	def __init__(self):
+		self._process        = psutil.Process(os.getpid())
+		self._first_time     = time.time()
+		self._process.cpu_percent()
+		self._first_cputimes = self._process.cpu_times()
+
+	def getResults(self):
+		ret = collections.OrderedDict()
+
+		first_cputimes = self._first_cputimes
+		first_time = self._first_time
+		cur_time = time.time()
+		cpu_total = self._process.cpu_percent()
+		cpu_times = self._process.cpu_times()
+
+		delta_time = cur_time - self._first_time
+
+		ret['time'] = datetime.datetime.now().strftime('%s')
+		ret['elapsed_time']    = round(delta_time, 3)
+		ret['total']           = max_round(cpu_total, 100, 2)
+		ret['user']            = max_round(100* (cpu_times.user - first_cputimes.user)/(cur_time - first_time), 100, 2)
+		ret['system']          = max_round(100* (cpu_times.system - first_cputimes.system)/(cur_time - first_time), 100, 2)
+		ret['children_user']   = max_round(100* (cpu_times.children_user - first_cputimes.children_user)/(cur_time - first_time), 100, 2)
+		ret['children_system'] = max_round(100* (cpu_times.children_system - first_cputimes.children_system)/(cur_time - first_time), 100, 2)
+
 		return ret
 
 if __name__ == '__main__':
