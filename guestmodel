@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
-import numpy
-import argparse
 import time
 import os
 import sys
+import argparse
+
+import math
+import numpy
 
 import util
 
@@ -26,8 +28,8 @@ class Program:
 
 			host_stats = util.WatchLog('{}/stats-1'.format(self._args.stats_dir), 'json')
 
-			model1m   = Model('model-1m',  600)
-			#model5m   = Model('model-5m',  300)
+			#model1m   = Model('model-1m',  60)
+			model5m   = Model('model-5m',  300)
 			#model10m  = Model('model-10m', 600)
 
 			while True:
@@ -35,13 +37,13 @@ class Program:
 
 				lines = host_stats.read()
 				for l in lines:
-					model1m.feed(l)
-					#model5m.feed(l)
+					#model1m.feed(l)
+					model5m.feed(l)
 					#model10m.feed(l)
 
-				model1m.predict()
-				#model5m.predict()
-				#model10m.predict()
+				#model1m.printResults()
+				model5m.printResults()
+				#model10m.printResults()
 
 		# Exit conditions:
 		except KeyboardInterrupt:
@@ -61,18 +63,19 @@ class Model:
 	_cpu_list      = None
 	# Time Serie Values:
 	_sample_size   = 0
-	_total_percent = []   # cpu time (normalized by cpus)
-	_total_demand  = None # cpu time + steal time of all VMs (Markov Chain) (normalized by total_vcpus)
+	_total_usage   = []   # cpu time (normalized by cpus)
+	_total_demand  = []
+	_other_demand  = None # cpu time + steal time of all VMs (Markov Chain) (normalized by total_vcpus)
 	_total_vcpus   = []   # number of VCPUs of all VMs
-	_vcpus         = None
-	_vcpu_percent  = []
-	_vcpu_steal    = []
+	_guest_vcpus   = None
+	_guest_usage   = []
+	_guest_steal   = []
 
 	def __init__(self, prefix, sample_limit):
 		assert sample_limit >= 0
 		self._prefix       = prefix
 		self._sample_limit = sample_limit
-		self._total_demand = MarkovChain(11, sample_limit=sample_limit) # 0-10 states
+		self._other_demand = MarkovChain(11, sample_limit=sample_limit) # 0-10 states
 
 	def feed(self, line):
 		self._sample_size += 1
@@ -82,47 +85,90 @@ class Model:
 			self._cpus = cpumap.count(True)
 			for i in range(0, len(cpumap)):
 				if cpumap[i] == True: self._cpu_list.append(i)
-		if self._vcpus == None:
-			self._vcpus = line['vm']['vcpu_count']
+		if self._guest_vcpus == None:
+			self._guest_vcpus = line['vm']['vcpu_count']
 
-		total_percent_aux = sum([ line['cpu'][i]['guest'] for i in self._cpu_list ]) / 100.
-		total_vcpus_aux = line['vm_totals']['vcpu_count']
-		total_demand_aux = total_percent_aux + (line['vm_totals']['steal']/100.)
-		#print('cpus={}, cpulist={}, total_percent_aux={}, total_vcpus_aux={}, total_demand_aux={}'.format(self._cpus, self._cpu_list, total_percent_aux, total_vcpus_aux, total_demand_aux))
+		total_vcpus = line['vm_totals']['vcpu_count']
+		total_usage = sum([ line['cpu'][i]['guest'] for i in self._cpu_list ]) / 100.
+		total_demand = total_usage + ( line['vm_totals']['steal'] / 100. )
 
-		self._total_percent.append( total_percent_aux / self._cpus ) # normalized by the number of CPUs
-		self._total_vcpus.append(total_vcpus_aux)
+		guest_usage = sum([ i['usage'] for i in line['vm']['vcpu'] ]) / 100.
+		guest_steal = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
 
-		self._vcpu_percent.append( sum([ line['vm']['vcpu'][i]['usage'] for i in range(0,self._vcpus) ]) /100. )
-		self._vcpu_steal.append( sum([ line['vm']['vcpu'][i]['steal'] for i in range(0,self._vcpus) ]) /100. )
+		other_demand = total_demand - guest_usage - guest_steal
+		other_vcpus = total_vcpus - self._guest_vcpus
 
-		if total_demand_aux == 0: total_demand_aux = 0.1
-		total_demand_pervcpu = int(round(10* self._cpus / total_demand_aux, 0))
-		#print('total_demand_pervcpu={}'.format(total_demand_pervcpu))
-		if total_demand_pervcpu > 10: total_demand_pervcpu = 10
-		self._total_demand.increment(total_demand_pervcpu)
+		other_demand_normalized = int(round(10* other_demand / other_vcpus, 0)) if other_vcpus > 0 and other_demand >= 0 else 0
+		if other_demand_normalized > 10: other_demand_normalized = 10
+
+		#print('other_demand={}, other_demand_normalized={}'.format(other_demand, other_demand_normalized))
+
+		self._total_usage.append( total_usage / self._cpus ) # normalized by the number of CPUs
+		self._total_vcpus.append( total_vcpus )
+		self._total_demand.append( total_demand )
+
+		self._guest_usage.append( guest_usage )
+		self._guest_steal.append( guest_steal )
+
+		self._other_demand.increment( other_demand_normalized )
 
 		if self._sample_limit > 0:
 			while self._sample_size > self._sample_limit:
-				self._sample_size -=1
-				self._total_percent.pop(0)
+				self._sample_size -= 1
+				self._total_usage.pop(0)
 				self._total_vcpus.pop(0)
-				self._vcpu_percent.pop(0)
-				self._vcpu_steal.pop(0)
+				self._total_demand.pop(0)
+				self._guest_usage.pop(0)
+				self._guest_steal.pop(0)
 
-	def predict(self):
-		print( '{}: Histogram    : {}'.format(self._prefix, self._total_demand.histogram().tolist()) )
-		print( '{}: Markov Chain : {}'.format(self._prefix, self._total_demand.predictNext().tolist()) )
+	def printResults(self):
+		histogram = self._other_demand.histogram()
+		markov = self._other_demand.predictNext()
+		print()
+		print( '{}: Total usage       : {:.3f}%'.format(self._prefix, self._cpus * self._total_usage[-1] ))
+		print( '{}: Total demand      : {:.3f}%'.format(self._prefix, self._total_demand[-1] ))
+		print( '{}: Minimum CPU times : {}'.format(self._prefix, self.predictMinimum() ))
+		print( '{}:                   : {}'.format(self._prefix, [ '{:^5}'.format(i) for i in range(0,11) ]) )
+		print( '{}: Histogram         : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in histogram ]) )
+		print( '{}: Markov Chain      : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in markov ]) )
+		print( '{}: Prediction Hist   : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
+		print( '{}: Prediction Markov : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(markov) ]) )
+
+	def predictMinimum(self):
+		vcpus = self._total_vcpus[-1]
+		if self._cpus >= vcpus: return [(1,1), (1,1)]
+
+		r = float(vcpus % self._cpus) / self._cpus
+
+		return [(1 / math.ceil(vcpus / self._cpus), r), (1 / math.floor(vcpus / self._cpus), 1-r)]
+
+	def predictCum(self, model):
+		prediction = [0. for i in range(0,11)]
+
+		guest_vcpus = self._guest_vcpus
+		delta_vcpus = self._total_vcpus[-1] - guest_vcpus
+		#print('delta_vcpus={}'.format(delta_vcpus))
+
+		for o in range(0,11):
+			potential_usage = int(round(10 * float(self._cpus) / float(o*delta_vcpus/10. + guest_vcpus), 0))
+			#print('o={}, potential_usage={}, probability={}, demand={}'.format(o, potential_usage, model[o], float(o*delta_vcpus + guest_vcpus)))
+			if potential_usage > 10: potential_usage = 10
+			prediction[potential_usage] += model[o]
+
+		#print( '{}: Prediction Array  : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in prediction ]) )
+		for i in range(9,-1,-1):
+			prediction[i] += prediction[i+1]
+		return prediction
 
 class MarkovChain:
-	_size   = None # Matrix size
-	_names  = None # State names
-	_counts = None # Line sum
-	_matrix = None # Transition matrix
-	_sample_limit = 0
-	_sample_size  = 0
-	_sample       = []
-	_last_state = None
+	_size          = None # Matrix size
+	_names         = None # State names
+	_counts        = None # Line sum
+	_matrix        = None # Transition matrix
+	_sample_limit  = 0
+	_sample_size   = 0
+	_sample        = []
+	_last_state    = None
 
 	def __init__(self, size, names=None, sample_limit=0):
 		assert isinstance(size, int) and size > 1
@@ -190,7 +236,7 @@ class MarkovChain:
 
 			if self._counts[state_from] <= 0 or self._matrix[state_from][state_to] <= 0:
 				self.debugData()
-				raise Exception('self._counts[{f}] = {c} or self._matrix[{f}][{t}] = {m}'.format(f=state_from, t=state_to, c=self._counts[state_from], m=self._matrix[state_from][state_to]))
+				raise Exception('decrement error in the class MarkovChain: self._counts[{f}] = {c} or self._matrix[{f}][{t}] = {m}'.format(f=state_from, t=state_to, c=self._counts[state_from], m=self._matrix[state_from][state_to]))
 
 			self._counts[state_from] -= 1
 			self._matrix[state_from][state_to] -= 1

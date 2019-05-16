@@ -95,6 +95,7 @@ class Load:
 			zlib.compress(f.read())
 			f.close()
 
+		m.saveTimes()
 		return m.getResults()
 
 	def executeCommand(self, file):
@@ -102,52 +103,65 @@ class Load:
 		cmd = self.options.command.replace('%f', file) if file != None else self.options.command
 		cmd_list = shlex.split(cmd)
 		p = psutil.Popen(cmd_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-		time_start = time.time()
+		m = Metrics(p)
 		while True:
 			time.sleep(0.01)
-			cpu_times = p.cpu_times()
-			time_end = time.time()
+			m.saveTimes()
 			if p.poll() != None:
 				break
-		ret['time']            = datetime.datetime.now().strftime('%s')
-		ret['elapsed_time']    = round(time_end - time_start, 3)
-		ret['total']           = 0
-		ret['user']            = max_round(100* cpu_times.user / (time_end - time_start), 100, 2)
-		ret['system']          = max_round(100* cpu_times.system / (time_end - time_start), 100, 2)
-		ret['children_user']   = max_round(100* cpu_times.children_user / (time_end - time_start), 100, 2)
-		ret['children_system'] = max_round(100* cpu_times.children_system / (time_end - time_start), 100, 2)
-		ret['total']           = max_round(ret['user'] + ret['system'] + ret['children_user'] + ret['children_system'], 100, 2)
-		return ret
+
+		return m.getResults()
 
 class Metrics:
 	_process        = None
 	_first_time     = None
 	_first_cputimes = None
+	_first_ptimes   = None
+	_cur_time       = None
+	_cur_cputimes   = None
+	_cur_ptimes     = None
 
-	def __init__(self):
-		self._process        = psutil.Process(os.getpid())
+	def __init__(self, process=None):
+		self._process        = process if process != None else psutil.Process(os.getpid())
 		self._first_time     = time.time()
-		self._process.cpu_percent()
-		self._first_cputimes = self._process.cpu_times()
+		self._first_cputimes = psutil.cpu_times()
+		self._first_ptimes   = self._process.cpu_times()
+
+	def saveTimes(self):
+		self._cur_time     = time.time()
+		self._cur_cputimes = psutil.cpu_times()
+		self._cur_ptimes   = self._process.cpu_times()
 
 	def getResults(self):
 		ret = collections.OrderedDict()
 
-		first_cputimes = self._first_cputimes
 		first_time = self._first_time
-		cur_time = time.time()
-		cpu_total = self._process.cpu_percent()
-		cpu_times = self._process.cpu_times()
+		first_cputimes = self._first_cputimes
+		first_ptimes = self._first_ptimes
+
+		cur_time = self._cur_time
+		cur_cputimes = self._cur_cputimes
+		cur_ptimes = self._cur_ptimes
 
 		delta_time = cur_time - self._first_time
 
 		ret['time'] = datetime.datetime.now().strftime('%s')
 		ret['elapsed_time']    = round(delta_time, 3)
-		ret['total']           = max_round(cpu_total, 100, 2)
-		ret['user']            = max_round(100* (cpu_times.user - first_cputimes.user)/(cur_time - first_time), 100, 2)
-		ret['system']          = max_round(100* (cpu_times.system - first_cputimes.system)/(cur_time - first_time), 100, 2)
-		ret['children_user']   = max_round(100* (cpu_times.children_user - first_cputimes.children_user)/(cur_time - first_time), 100, 2)
-		ret['children_system'] = max_round(100* (cpu_times.children_system - first_cputimes.children_system)/(cur_time - first_time), 100, 2)
+		ret['total']           = max_round(100* (
+		                            cur_cputimes.user - first_cputimes.user
+		                            +cur_cputimes.nice - first_cputimes.nice
+		                            +cur_cputimes.system - first_cputimes.system
+		                            +cur_cputimes.softirq - first_cputimes.softirq
+		                            +cur_cputimes.guest - first_cputimes.guest
+		                            +cur_cputimes.guest_nice - first_cputimes.guest_nice
+		                            )/(cur_time - first_time), 100, 2)
+		ret['steal']           = max_round(100* (cur_cputimes.steal - first_cputimes.steal)/(cur_time - first_time), 100, 2)
+		ret['process']         = max_round(100* (
+		                            cur_ptimes.user - first_ptimes.user
+		                            +cur_ptimes.system - first_ptimes.system
+		                            +cur_ptimes.children_user - first_ptimes.children_user
+		                            +cur_ptimes.children_system - first_ptimes.children_system
+		                            )/(cur_time - first_time), 100, 2)
 
 		return ret
 
