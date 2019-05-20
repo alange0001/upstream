@@ -79,7 +79,8 @@ class Stat:
 							stats_d[i] = curr
 
 					if len(processed_d):
-						log.write(processed_d[1])
+						self.printNice(processed_d[1])
+						#log.write(processed_d[1])
 						self.writePerVM(processed_d)
 			else:
 				last = self.collectStats()
@@ -95,7 +96,30 @@ class Stat:
 			return 1  #'''
 		return 0
 
-	_logFiles_ = dict()
+	def printNice(self, processed_d):
+		p = processed_d
+
+		print('=== time={}, cpu_count={}, vms={} ==='.format(p['time'], p['cpu_count'], len(p['vm'])))
+		for i in range(0,len(p['cpu'])):
+			print(' CPU{}: '.format(i), end='')
+			for k, v in p['cpu'][i].items():
+				print('{}={:6.2f}, '.format(k, v), end='')
+			print('')
+		print(' vm_totals: vcpu_count={}, usage={:6.2f}, steal={:5.2f}, map={}'.format(
+			p['vm_totals']['vcpu_count'],
+			p['vm_totals']['usage'],
+			p['vm_totals']['steal'],
+			p['vm_totals']['map']))
+		for name, data in p['vm'].items():
+			print(' VM {:<13}: vcpu_count={}'.format(name, data['vcpu_count']))
+			for i in range(0, len(data['vcpu'])):
+				vcpu=data['vcpu'][i]
+				print('    VCPU{}: usage={:6.2f}, steal={:5.2f}, usage_percpu={}, map={}'.format(
+					i, vcpu['usage'], vcpu['steal'],
+					['{:6.2f}'.format(j) for j in vcpu['usage_percpu']],
+					vcpu['map']))
+
+	_logFiles = dict()
 	def writePerVM(self, processed_d):
 		assert self.args.export_dir != None
 
@@ -112,9 +136,9 @@ class Stat:
 				save['vm'] = stats['vm'][vm_name]
 
 				file_name = '{}/stats-{}'.format(dir, interval)
-				file_obj = self._logFiles_.get(file_name)
+				file_obj = self._logFiles.get(file_name)
 				if file_obj == None:
-					self._logFiles_[file_name] = file_obj = LogFile(file_name, self.args.format)
+					self._logFiles[file_name] = file_obj = LogFile(file_name, self.args.format)
 				file_obj.write(save)
 
 	def processStats(self, last_stats, current_stats):
@@ -149,10 +173,17 @@ class Stat:
 				data_cpu['freq_max']     = freq_i.max
 
 		if self.is_host:
-			ret['vm_totals'] = collections.OrderedDict()
-			vm_totals_steal = 0
+			ret['vm_totals'] = vm_totals = collections.OrderedDict()
+			vm_totals_usage = 0.
+			vm_totals_steal = 0.
+
 			ret['vm'] = collections.OrderedDict()
-			for vm_name, vm in current_stats['vms'].items():
+
+			vm_sort_list = [ n for n in current_stats['vms'].keys() ]
+			vm_sort_list.sort()
+
+			for vm_name in vm_sort_list:
+				vm     = current_stats['vms'][vm_name]
 				vm_old = last_stats['vms'].get(vm_name)
 
 				ret['vm'][vm_name] = ret_vm = collections.OrderedDict()
@@ -165,10 +196,11 @@ class Stat:
 
 					vm_vcpu['map']   = vm['vcpus'][1][i]
 					if vm_old != None:
-						vm_vcpu['usage'] = max_round(
+						vm_vcpu['usage'] = x = max_round(
 							(int(vm['cpuacct'][i]['total']) - int(vm_old['cpuacct'][i]['total'])) /
 							(delta_time * 10000000)
 							, 100, 2)
+						vm_totals_usage += x
 						vm_vcpu['usage_percpu'] = vm_vcpu_usage_percpu = []
 						for j in range(0,self.cpus):
 							vm_vcpu_usage_percpu.append(
@@ -184,9 +216,10 @@ class Stat:
 							(delta_time * 10000000)
 							, 100, 2)
 						vm_totals_steal += x
-			ret['vm_totals']['vcpu_count'] = sum( [ ret['vm'][i]['vcpu_count'] for i in ret['vm'].keys() ] )
-			ret['vm_totals']['steal'] = vm_totals_steal
-			ret['vm_totals']['map'] = self.getCpuset()
+			vm_totals['vcpu_count'] = sum( [ ret['vm'][i]['vcpu_count'] for i in ret['vm'].keys() ] )
+			vm_totals['usage'] = vm_totals_usage
+			vm_totals['steal'] = vm_totals_steal
+			vm_totals['map'] = self.getCpuset()
 		return ret
 
 	def collectStats(self):

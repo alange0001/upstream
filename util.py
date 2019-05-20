@@ -81,7 +81,7 @@ class WatchLog:
 	_file_name   = None
 	_header_size = 0
 	_header      = []
-	_lines       = []
+	#_lines       = []
 
 	def __init__(self, file, format):
 		assert format in ['csv', 'json']
@@ -107,7 +107,7 @@ class WatchLog:
 			for i in lines:
 				line_list = i.replace('\n', '').split('; ')
 				ret_i  = collections.OrderedDict()
-				self._lines.append(ret_i)
+				#self._lines.append(ret_i)
 				ret.append(ret_i)
 				for j in range(0, self._header_size):
 					ret_i[self._header[j]] = line_list[j]
@@ -115,11 +115,11 @@ class WatchLog:
 			for i in lines:
 				i = i.replace('\n', '')
 				ret_i = json.loads(i)
-				self._lines.append(ret_i)
+				#self._lines.append(ret_i)
 				ret.append(ret_i)
 		return ret
 
-	def lines(self):
-		return self._lines
+	#def lines(self):
+	#	return self._lines
 	def header(self):
 		return self._header

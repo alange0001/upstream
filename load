@@ -10,19 +10,15 @@ import collections
 import zlib
 import os
 import sys
+import threading
 
 from util import max_round
 
 class Load:
 	# Command parameters and options
-	options    = None
+	_options    = None
 	# Output control
-	first_line = True
-	# Process and stats information
-	#pid        = None
-	#process    = None
-	#last_time  = None
-	#last_stat  = None
+	_first_line = True
 
 	def __init__(self):
 		parser = argparse.ArgumentParser(
@@ -30,77 +26,98 @@ class Load:
 		parser.add_argument('-b', '--builtin',
 			default=None, choices=['zlib'],
 			help='builtin functions')
-		parser.add_argument('-c', '--command', type=str,
+		'''parser.add_argument('-c', '--command', type=str,
 			default=None,
-			help='command (use %%f for to indicate the file)')
+			help='command (use %%f for to indicate the file)') #'''
 		parser.add_argument('-f', '--files', type=str,
 			default=None, nargs='+',
-			help='list of files to process using the command')
+			help='list of files to process using the function/command')
 		parser.add_argument('-l', '--loops', type=int,
 			default=0,
 			help='number of loops (0 for infinite)')
 		parser.add_argument('-s', '--sleep', type=float,
 			default=0.,
 			help='sleep interval between tasks')
+		parser.add_argument('-S', '--sleep-file', type=str,
+			default=None,
+			help='sleep interval from file')
 
-		self.options = parser.parse_args()
-		if self.options.files == None:
-			self.options.files = [None]
-		#print(self.options)
+		self._options = parser.parse_args()
+		#print(self._options)
+		if self._options.files == None:
+			self._options.files = [None]
+		assert self._options.loops >= 0
 
 	def main(self):
 		try:
-			assert self.options.sleep >= 0
-			assert self.options.loops >= 0
+			ret = 0
 
-			#self.pid       = os.getpid()
-			#self.process   = psutil.Process(self.pid)
-			#self.last_time = time.time()
-			#self.last_stat = self.process.cpu_times()
+			if self._options.sleep_file != None:
+				UpdateSleep(self._options).start()
 
+			metrics = Metrics()
+
+			t = 0
 			count = 0
 			while True:
-				for i in self.options.files:
-					if self.options.builtin != None:
-						self.printLine(self.executeBuiltin(i))
-					elif self.options.command != None:
-						self.printLine(self.executeCommand(i))
+				for i in self._options.files:
+					assert self._options.sleep == -1 or self._options.sleep >= 0
 
-					if self.options.sleep > 0:
-						time.sleep(self.options.sleep)
+					if self._options.sleep > 0:
+						time.sleep(self._options.sleep)
 
-				if self.options.loops == 0: continue
+					if self._options.sleep == -1:
+						time.sleep(1)
+					else:
+						if self._options.builtin != None:
+							t = self.executeBuiltin(i)
+
+						'''elif self._options.command != None:
+							self.printLine(self.executeCommand(i)) #'''
+
+					line = metrics.getResults(save_times=True)
+					line['elapsed_time'] = round(t,2)
+					self.printLine(line)
+
+				if self._options.loops == 0: continue
 				count += 1
-				if count >= self.options.loops: break
+				if count >= self._options.loops: break
 
 		# Exit conditions
 		except KeyboardInterrupt:
-			return 0
-		except Exception as e:
+			pass
+		'''except Exception as e:
+			if update_sleep != None:
+				update_sleep.stop()
+				update_sleep.join()
 			sys.stderr.write('error: {}\n'.format(str(e)))
-			return 1
-		return 0
+			ret = 1 #'''
+
+		for thread in threading.enumerate():
+			if thread != threading.current_thread():
+				thread.stop()
+				thread.join()
+		return ret
 
 	def printLine(self, output):
-		if self.first_line:
+		if self._first_line:
 			print('#'+'; '.join(output.keys()))
-			self.first_line = False
-		print( '; '.join( [str(i) for i in output.values()] ) )
+			self._first_line = False
+		print( '; '.join( ['{:6.2f}'.format(i) if isinstance(i,float) else str(i) for i in output.values()] ) )
 
 	def executeBuiltin(self, file):
-		m = Metrics()
+		last_time = time.time()
 
-		if self.options.builtin == 'zlib':
+		if self._options.builtin == 'zlib':
 			f = open(file, 'rb')
 			zlib.compress(f.read())
 			f.close()
 
-		m.saveTimes()
-		return m.getResults()
+		return time.time() - last_time
 
-	def executeCommand(self, file):
+	'''def executeCommand(self, file):
 		ret = collections.OrderedDict()
-		cmd = self.options.command.replace('%f', file) if file != None else self.options.command
+		cmd = self._options.command.replace('%f', file) if file != None else self._options.command
 		cmd_list = shlex.split(cmd)
 		p = psutil.Popen(cmd_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 		m = Metrics(p)
@@ -110,43 +127,77 @@ class Load:
 			if p.poll() != None:
 				break
 
-		return m.getResults()
+		return m.getResults() #'''
+
+class UpdateSleep(threading.Thread):
+	_options      = None
+	_stop_event   = None
+
+	def __init__(self, options):
+		assert os.path.isfile(options.sleep_file), 'sleep-file="{}" not found'.format(options.sleep_file)
+		self._options = options
+		self._stop_event = threading.Event()
+		threading.Thread.__init__(self)
+
+	def run(self):
+		while True:
+			if self._stop_event.is_set(): break
+
+			f = open(self._options.sleep_file, 'r')
+			s = f.read().replace('\n','')
+			f.close()
+
+			sleep = float(s)
+			if self._options.sleep != sleep:
+				print('# sleep value changed from {} to {}'.format(self._options.sleep, sleep))
+				self._options.sleep = sleep
+
+			time.sleep(1)
+
+	def stop(self):
+		self._stop_event.set()
 
 class Metrics:
 	_process        = None
-	_first_time     = None
-	_first_cputimes = None
-	_first_ptimes   = None
+	_last_time     = None
+	_last_cputimes = None
+	_last_ptimes   = None
 	_cur_time       = None
 	_cur_cputimes   = None
 	_cur_ptimes     = None
 
-	def __init__(self, process=None):
-		self._process        = process if process != None else psutil.Process(os.getpid())
-		self._first_time     = time.time()
-		self._first_cputimes = psutil.cpu_times()
-		self._first_ptimes   = self._process.cpu_times()
-
-	def saveTimes(self):
+	def __init__(self):
+		self._process      = psutil.Process(os.getpid())
 		self._cur_time     = time.time()
 		self._cur_cputimes = psutil.cpu_times()
 		self._cur_ptimes   = self._process.cpu_times()
 
-	def getResults(self):
+	def saveTimes(self):
+		self._last_time     = self._cur_time
+		self._last_cputimes = self._cur_cputimes
+		self._last_ptimes   = self._cur_ptimes
+
+		self._cur_time     = time.time()
+		self._cur_cputimes = psutil.cpu_times()
+		self._cur_ptimes   = self._process.cpu_times()
+
+	def getResults(self, save_times=False):
+		if save_times: self.saveTimes()
+
 		ret = collections.OrderedDict()
 
-		first_time = self._first_time
-		first_cputimes = self._first_cputimes
-		first_ptimes = self._first_ptimes
+		first_time = self._last_time
+		first_cputimes = self._last_cputimes
+		first_ptimes = self._last_ptimes
 
 		cur_time = self._cur_time
 		cur_cputimes = self._cur_cputimes
 		cur_ptimes = self._cur_ptimes
 
-		delta_time = cur_time - self._first_time
+		delta_time = cur_time - self._last_time
 
 		ret['time'] = datetime.datetime.now().strftime('%s')
-		ret['elapsed_time']    = round(delta_time, 3)
+		#ret['elapsed_time']    = round(delta_time, 3)
 		ret['total']           = max_round(100* (
 		                            cur_cputimes.user - first_cputimes.user
 		                            +cur_cputimes.nice - first_cputimes.nice
@@ -154,14 +205,14 @@ class Metrics:
 		                            +cur_cputimes.softirq - first_cputimes.softirq
 		                            +cur_cputimes.guest - first_cputimes.guest
 		                            +cur_cputimes.guest_nice - first_cputimes.guest_nice
-		                            )/(cur_time - first_time), 100, 2)
-		ret['steal']           = max_round(100* (cur_cputimes.steal - first_cputimes.steal)/(cur_time - first_time), 100, 2)
+		                            )/(cur_time - first_time), 100., 2)
+		ret['steal']           = max_round(100* (cur_cputimes.steal - first_cputimes.steal)/(cur_time - first_time), 100., 2)
 		ret['process']         = max_round(100* (
 		                            cur_ptimes.user - first_ptimes.user
 		                            +cur_ptimes.system - first_ptimes.system
 		                            +cur_ptimes.children_user - first_ptimes.children_user
 		                            +cur_ptimes.children_system - first_ptimes.children_system
-		                            )/(cur_time - first_time), 100, 2)
+		                            )/(cur_time - first_time), 100., 2)
 
 		return ret
 
