@@ -52,7 +52,7 @@ fig.set_figheight(7)
 for i in range(1,vm_count+1):
 	name    = 'test-load{}'.format(i)
 	#vm_file = '/media/auto/alange-ms01-r/virtual/hostshare/profile/test-load{}/stats-1'.format(i)
-	vm_file = '/media/auto/alange-ms01-r/virtual/hostshare/usr_global/src/upstream/plots/profile-data1/test-load{}/stats-1'.format(i)
+	vm_file = '/media/auto/alange-ms01-r/virtual/hostshare/usr_global/src/upstream/plots/profile-data2/test-load{}/stats-1'.format(i)
 
 	log = util.WatchLog(vm_file, 'json')
 	lines = log.read()
@@ -61,10 +61,12 @@ for i in range(1,vm_count+1):
 	x = [ int(l['time']) - time_min for l in lines ]
 	usage = [ float(l['vm']['vcpu'][0]['usage']) for l in lines ]
 	steal = [ float(l['vm']['vcpu'][0]['steal']) for l in lines ]
+	demand = [ float(l['vm']['vcpu'][0]['usage']) + float(l['vm']['vcpu'][0]['steal']) for l in lines ]
 
 	axs[i-1].set_ylim(ymin=-5, ymax=110)
-	axs[i-1].plot(x, usage, lw=1)
-	axs[i-1].plot(x, steal, lw=1)
+	axs[i-1].plot(x, usage,  lw=1)
+	axs[i-1].plot(x, steal,  lw=1)
+	axs[i-1].plot(x, demand, lw=1)
 
-fig.legend(loc='lower center', labels=['usage', 'steal'], ncol=2, frameon=True)
+fig.legend(loc='lower center', labels=['usage', 'steal', 'VM\'s demand'], ncol=3, frameon=True)
 plt.show()
