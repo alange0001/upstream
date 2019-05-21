@@ -5,6 +5,7 @@ import os
 import sys
 import argparse
 
+import collections
 import math
 import numpy
 
@@ -92,15 +93,18 @@ class Model:
 		if self._guest_vcpus == None:
 			self._guest_vcpus = line['vm']['vcpu_count']
 
-		total_vcpus = line['vm_totals']['vcpu_count']
-		total_usage = sum([ line['cpu'][i]['guest'] for i in self._cpu_list ]) / 100.
-		total_demand = total_usage + ( line['vm_totals']['steal'] / 100. )
+		ret = collections.OrderedDict()
 
-		guest_usage = sum([ i['usage'] for i in line['vm']['vcpu'] ]) / 100.
-		guest_steal = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
+		ret['cpus']         = self._cpus
+		ret['total_vcpus']  = total_vcpus  = line['vm_totals']['vcpu_count']
+		ret['total_usage']  = total_usage  = sum([ line['cpu'][i]['guest'] for i in self._cpu_list ]) / 100.
+		ret['total_demand'] = total_demand = total_usage + ( line['vm_totals']['steal'] / 100. )
 
-		other_demand = total_demand - guest_usage - guest_steal
-		other_vcpus = total_vcpus - self._guest_vcpus
+		ret['guest_usage']  = guest_usage  = sum([ i['usage'] for i in line['vm']['vcpu'] ]) / 100.
+		ret['guest_steal']  = guest_steal  = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
+
+		ret['other_demand'] = other_demand = total_demand - guest_usage - guest_steal
+		ret['other_vcpus']  = other_vcpus  = total_vcpus - self._guest_vcpus
 
 		other_demand_normalized = int(round(10* other_demand / other_vcpus, 0)) if other_vcpus > 0 and other_demand >= 0 else 0
 		if other_demand_normalized > 10: other_demand_normalized = 10
@@ -116,6 +120,8 @@ class Model:
 
 		self._other_demand.increment( other_demand_normalized )
 
+		return ret
+
 	def printResults(self):
 		histogram = self._other_demand.histogram()
 		markov = self._other_demand.predictNext()
@@ -128,6 +134,12 @@ class Model:
 		print( '{}: Markov Chain      : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in markov ]) )
 		print( '{}: Prediction Hist   : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
 		print( '{}: Prediction Markov : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(markov) ]) )
+
+	def predict(self, cpus, guest_vcpus, other_demand):
+		ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
+		if ret > guest_vcpus:
+			ret = float(guest_vcpus)
+		return ret
 
 	def predictMinima(self):
 		vcpus = self._total_vcpus[-1]
