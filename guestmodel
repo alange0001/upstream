@@ -141,6 +141,12 @@ class Model:
 			ret = float(guest_vcpus)
 		return ret
 
+	def predictRatio(self, cpus, guest_vcpus, other_demand):
+		ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
+		if ret > guest_vcpus:
+			ret = float(guest_vcpus)
+		return ret
+
 	def predictMinima(self):
 		vcpus = self._total_vcpus[-1]
 		if self._cpus >= vcpus: return [(1,1), (1,1)]
