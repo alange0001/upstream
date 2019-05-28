@@ -4,67 +4,50 @@ import argparse
 import os
 import sys
 import time
+import random
 
 class LoadControl:
 	_options = None
 	_vms  = [ 'test-load{}'.format(i) for i in range(1,9) ]
 	_load = [
-			(       5, 'test-load1',  0.0),
-			(      10, 'test-load2',  0.8),
-			(      10, 'test-load3',  0.8),
-			(      30, 'test-load4',  0.8),
-			(      30, 'test-load5',  0.8),
-			( 1*60+00, 'test-load2',  0.4),
-			( 1*60+00, 'test-load3',  0.4),
-			( 1*60+30, 'test-load4',  0.4),
-			( 1*60+30, 'test-load5',  0.4),
-			( 2*60+00, 'test-load2',  0.2),
-			( 2*60+00, 'test-load3',  0.2),
-			( 2*60+30, 'test-load4',  0.2),
-			( 2*60+30, 'test-load5',  0.2),
-			( 3*60+00, 'test-load2',  0.1),
-			( 3*60+00, 'test-load3',  0.1),
-			( 3*60+30, 'test-load4',  0.1),
-			( 3*60+30, 'test-load5',  0.1),
-			( 4*60+00, 'test-load2',  0.0),
-			( 4*60+00, 'test-load3',  0.0),
-			( 4*60+30, 'test-load4',  0.0),
-			( 4*60+30, 'test-load5',  0.0),
-			( 5*60+00, 'test-load2', -1  ),
-			( 5*60+00, 'test-load3',  0.1),
-			( 5*60+30, 'test-load4',  0.1),
-			( 5*60+30, 'test-load5',  0.1),
-			( 6*60+00, 'test-load2',  0.1),
-			( 6*60+00, 'test-load3',  0.8),
-			( 6*60+30, 'test-load4',  0.0),
-			( 6*60+30, 'test-load5',  0.1),
-			(       0, 'test-load1', -1  ),
-			(       0, 'test-load2', -1  ),
-			(       0, 'test-load3', -1  ),
-			(       0, 'test-load4', -1  ),
-			(       0, 'test-load5', -1  ),
+			#(       0, 'test-load1', -1  ),
 		]
 
 	def __init__(self):
 		parser = argparse.ArgumentParser(
 			description="Control de load of each VM.")
 		parser.add_argument('-e', '--export-dir', type=str,
-			default=None,
+			default=None, required=True,
 			help='directory used to export information to the guests')
 		parser.add_argument('-s', '--set', type=float,
 			default=None,
 			help='set all guests to the same value')
+		parser.add_argument('-v', '--vms', type=int,
+			default=None, required=True,
+			help='number of VMs to control')
+		parser.add_argument('-p', '--print',
+			default=False, action='store_true',
+			help='print the load plan and exit')
 		self._options = parser.parse_args()
-		assert os.path.isdir(self._options.export_dir), 'export-dir="{}" not found'.format(self._options.export_dir)
 
 	def main(self):
 		options = self._options
-		load    = self._load
 
 		try:
+			assert os.path.isdir(options.export_dir), 'export-dir="{}" not found'.format(options.export_dir)
+			assert options.vms >= 1 and options.vms <= len(self._vms), 'the parameter -v/--vms must be between 1 and {}'.format(len(self._vms))
+
 			if options.set != None:
-				for i in self._vms:
-					self.writeSleep(i, options.set)
+				for i in range(0,options.vms):
+					self.writeSleep(self._vms[i], options.set)
+				return 0
+
+			self._buildLoad(options.vms)
+			load    = self._load
+
+			if options.print:
+				for i in load:
+					print(i)
 				return 0
 
 			count = 0
@@ -78,6 +61,9 @@ class LoadControl:
 
 		except KeyboardInterrupt:
 			pass
+		except AssertionError as e:
+			sys.stderr.write('error: {}\n'.format(str(e)))
+			return 1
 
 		return 0
 
@@ -86,6 +72,34 @@ class LoadControl:
 		f = open('{}/{}/sleep'.format(self._options.export_dir, vm_name), 'w')
 		f.write(str(value))
 		f.close()
+
+	def _buildLoad(self, vms):
+		interval = 7
+		phases = [ .8, .6, .4, .2, .1, 0. ]
+		load = self._load
+
+		time = 5
+		other_vms = [-1 for i in range(1,vms)]
+		load.append((time, self._vms[0], 0.0))
+		for ph in phases:
+			for o in range(0, len(other_vms)):
+				other_vms[o] = ph
+				aux = other_vms[:]
+				for i in range(0,7):
+					time += interval
+					random.shuffle(aux)
+					#print(aux)
+					for o2 in range(0, len(other_vms)):
+						load.append((time, self._vms[o2+1], aux[o2]))
+					if i in [0, 3]:
+						time += 1
+						load.append((time, self._vms[0], -1))
+						time += 2
+						load.append((time, self._vms[0], 0))
+
+		time += 10
+		for i in range(0,vms):
+			load.append((time, self._vms[i], -1))
 
 if __name__ == '__main__':
 	exit(LoadControl().main())

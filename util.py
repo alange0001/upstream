@@ -6,6 +6,9 @@ import json
 def max_round(value, max, decimals):
 	return max if value > max else round(value, decimals)
 
+def max(value, max):
+	return max if value > max else value
+
 def coalesce(*args):
 	for i in args:
 		if i != None:

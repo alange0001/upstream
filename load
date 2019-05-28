@@ -26,12 +26,9 @@ class Load:
 		parser.add_argument('-b', '--builtin',
 			default=None, choices=['zlib'],
 			help='builtin functions')
-		'''parser.add_argument('-c', '--command', type=str,
-			default=None,
-			help='command (use %%f for to indicate the file)') #'''
 		parser.add_argument('-f', '--files', type=str,
 			default=None, nargs='+',
-			help='list of files to process using the function/command')
+			help='list of files to process using the function')
 		parser.add_argument('-l', '--loops', type=int,
 			default=0,
 			help='number of loops (0 for infinite)')
@@ -68,12 +65,9 @@ class Load:
 
 					if self._options.sleep == -1:
 						time.sleep(1)
+						t = 0
 					else:
-						if self._options.builtin != None:
-							t = self.executeBuiltin(i)
-
-						'''elif self._options.command != None:
-							self.printLine(self.executeCommand(i)) #'''
+						t = self.executeBuiltin(i)
 
 					line = metrics.getResults(save_times=True)
 					line['elapsed_time'] = round(t,2)
@@ -86,12 +80,9 @@ class Load:
 		# Exit conditions
 		except KeyboardInterrupt:
 			pass
-		'''except Exception as e:
-			if update_sleep != None:
-				update_sleep.stop()
-				update_sleep.join()
+		except Exception as e:
 			sys.stderr.write('error: {}\n'.format(str(e)))
-			ret = 1 #'''
+			ret = 1
 
 		for thread in threading.enumerate():
 			if thread != threading.current_thread():
@@ -114,20 +105,6 @@ class Load:
 			f.close()
 
 		return time.time() - last_time
-
-	'''def executeCommand(self, file):
-		ret = collections.OrderedDict()
-		cmd = self._options.command.replace('%f', file) if file != None else self._options.command
-		cmd_list = shlex.split(cmd)
-		p = psutil.Popen(cmd_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-		m = Metrics(p)
-		while True:
-			time.sleep(0.01)
-			m.saveTimes()
-			if p.poll() != None:
-				break
-
-		return m.getResults() #'''
 
 class UpdateSleep(threading.Thread):
 	_options      = None

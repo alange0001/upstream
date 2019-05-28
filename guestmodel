@@ -8,11 +8,14 @@ import argparse
 import collections
 import math
 import numpy
+import math
+from scipy.stats import norm
+from scipy.stats import logistic
 
 import util
 
 class Program:
-	_args = None
+	_options = None
 
 	def __init__(self):
 		parser = argparse.ArgumentParser(
@@ -20,31 +23,26 @@ class Program:
 		parser.add_argument('-d', '--stats-dir', type=str,
 			default='/host', required=True,
 			help='directory of statistics provided by the host')
-		self._args = parser.parse_args()
-		#print(self._args)
+		self._options = parser.parse_args()
+		#print(self._options)
 
 	def main(self):
 		try:
-			if not os.path.isdir(self._args.stats_dir): raise Exception('parameter --stats-dir="{}" not found a directory'.format(self._args.stats_dir))
+			if not os.path.isdir(self._options.stats_dir): raise Exception('parameter --stats-dir="{}" not found a directory'.format(self._args.stats_dir))
 
-			host_stats = util.WatchLog('{}/stats-1'.format(self._args.stats_dir), 'json')
+			host_stats = util.WatchLog('{}/stats-1'.format(self._options.stats_dir), 'json')
 
-			#model1m   = Model('model-1m',  60)
 			model5m   = Model('model-5m',  300)
-			#model10m  = Model('model-10m', 600)
 
 			while True:
 				time.sleep(1)
 
 				lines = host_stats.read()
 				for l in lines:
-					#model1m.feed(l)
-					model5m.feed(l)
-					#model10m.feed(l)
+					s = GuestStats(l)
+					model5m.feed(s)
 
-				#model1m.printResults()
 				model5m.printResults()
-				#model10m.printResults()
 
 		# Exit conditions:
 		except KeyboardInterrupt:
@@ -57,19 +55,12 @@ class Program:
 class Model:
 	# Statistics origin
 	_prefix        = None
-	_file_name     = None
 	_sample_limit  = 0
 	# Hardware information
 	_cpus          = None
-	_cpu_list      = None
 	# Time Serie Values:
-	_total_usage   = None # cpu time (normalized by cpus)
-	_total_demand  = None
-	_other_demand  = None # cpu time + steal time of all VMs (Markov Chain) (normalized by total_vcpus)
-	_total_vcpus   = None # number of VCPUs of all VMs
-	_guest_vcpus   = None # number of the guest's VCPUs
-	#_guest_usage   = None
-	#_guest_steal   = None
+	_stats         = None
+	_other_demand  = None
 
 	def __init__(self, prefix, sample_limit):
 		assert sample_limit >= 0
@@ -77,101 +68,238 @@ class Model:
 		self._sample_limit = sample_limit
 		self._other_demand = MarkovChain(11, sample_limit=sample_limit) # 0-10 states
 
-		self._total_usage  = Llist(limit=sample_limit)
-		self._total_demand = Llist(limit=sample_limit)
-		self._total_vcpus  = Llist(limit=sample_limit)
-		#self._guest_usage  = Llist(limit=sample_limit)
-		#self._guest_steal  = Llist(limit=sample_limit)
+		self._stats = Llist(limit=sample_limit)
 
-	def feed(self, line):
+	def feed(self, stats):
 		if self._cpus == None:
-			self._cpu_list = []
-			cpumap = line['vm_totals']['map']
-			self._cpus = cpumap.count(True)
-			for i in range(0, len(cpumap)):
-				if cpumap[i] == True: self._cpu_list.append(i)
+			self._cpus = stats.host_cpus
 		if self._guest_vcpus == None:
-			self._guest_vcpus = line['vm']['vcpu_count']
+			self._guest_vcpus = stats.guest_vcpus
 
-		ret = collections.OrderedDict()
+		#ret = collections.OrderedDict()
 
-		ret['cpus']         = self._cpus
-		ret['total_vcpus']  = total_vcpus  = line['vm_totals']['vcpu_count']
-		ret['total_usage']  = total_usage  = sum([ line['cpu'][i]['guest'] for i in self._cpu_list ]) / 100.
-		ret['total_demand'] = total_demand = total_usage + ( line['vm_totals']['steal'] / 100. )
+		#other_demand_normalized = int(round(10* other_demand / other_vcpus, 0)) if other_vcpus > 0 and other_demand >= 0 else 0
+		#if other_demand_normalized > 10: other_demand_normalized = 10
 
-		ret['guest_usage']  = guest_usage  = sum([ i['usage'] for i in line['vm']['vcpu'] ]) / 100.
-		ret['guest_steal']  = guest_steal  = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
+		##print('other_demand={}, other_demand_normalized={}'.format(other_demand, other_demand_normalized))
 
-		ret['other_demand'] = other_demand = total_demand - guest_usage - guest_steal
-		ret['other_vcpus']  = other_vcpus  = total_vcpus - self._guest_vcpus
+		#self._total_usage.append( total_usage / self._cpus ) # normalized by the number of CPUs
+		#self._total_vcpus.append( total_vcpus )
+		#self._total_demand.append( total_demand )
 
-		other_demand_normalized = int(round(10* other_demand / other_vcpus, 0)) if other_vcpus > 0 and other_demand >= 0 else 0
-		if other_demand_normalized > 10: other_demand_normalized = 10
+		##self._guest_usage.add( guest_usage )
+		##self._guest_steal.add( guest_steal )
 
-		#print('other_demand={}, other_demand_normalized={}'.format(other_demand, other_demand_normalized))
-
-		self._total_usage.append( total_usage / self._cpus ) # normalized by the number of CPUs
-		self._total_vcpus.append( total_vcpus )
-		self._total_demand.append( total_demand )
-
-		#self._guest_usage.add( guest_usage )
-		#self._guest_steal.add( guest_steal )
-
-		self._other_demand.increment( other_demand_normalized )
-
-		return ret
+		#self._other_demand.increment( other_demand_normalized )
 
 	def printResults(self):
 		histogram = self._other_demand.histogram()
 		markov = self._other_demand.predictNext()
-		print()
-		print( '{}: Total usage       : {:.3f}%'.format(self._prefix, self._cpus * self._total_usage[-1] ))
-		print( '{}: Total demand      : {:.3f}%'.format(self._prefix, self._total_demand[-1] ))
-		print( '{}: Minima            : {}'.format(self._prefix, self.predictMinima() ))
-		print( '{}:                   : {}'.format(self._prefix, [ '{:^5}'.format(i) for i in range(0,11) ]) )
-		print( '{}: Histogram         : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in histogram ]) )
-		print( '{}: Markov Chain      : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in markov ]) )
-		print( '{}: Prediction Hist   : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
-		print( '{}: Prediction Markov : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(markov) ]) )
+		#print()
+		#print( '{}: Total usage       : {:.3f}%'.format(self._prefix, self._cpus * self._total_usage[-1] ))
+		#print( '{}: Total demand      : {:.3f}%'.format(self._prefix, self._total_demand[-1] ))
+		#print( '{}: Minima            : {}'.format(self._prefix, self.predictMinima() ))
+		#print( '{}:                   : {}'.format(self._prefix, [ '{:^5}'.format(i) for i in range(0,11) ]) )
+		#print( '{}: Histogram         : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in histogram ]) )
+		#print( '{}: Markov Chain      : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in markov ]) )
+		#print( '{}: Prediction Hist   : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
+		#print( '{}: Prediction Markov : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(markov) ]) )
 
-	def predict(self, cpus, guest_vcpus, other_demand):
-		ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
-		if ret > guest_vcpus:
-			ret = float(guest_vcpus)
+	#def predict(self, cpus, guest_vcpus, other_demand):
+	#	ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
+	#	if ret > guest_vcpus:
+	#		ret = float(guest_vcpus)
+	#	return ret
+
+	#def predictRatio(self, cpus, guest_vcpus, other_demand):
+	#	if other_demand < 0: other_demand = 0.
+	#	ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
+	#	if ret > guest_vcpus:
+	#		ret = float(guest_vcpus)
+	#	return ret
+
+	#def predictMinima(self):
+	#	vcpus = self._total_vcpus[-1]
+	#	if self._cpus >= vcpus: return [(1,1), (1,1)]
+
+	#	r = float(vcpus % self._cpus) / self._cpus
+
+	#	return [(round(1 / math.ceil(vcpus / self._cpus), 2), round(r,2)), (round(1 / math.floor(vcpus / self._cpus), 2), round(1-r,2))]
+
+	#def predictCum(self, model):
+	#	prediction = [0. for i in range(0,11)]
+
+	#	guest_vcpus = self._guest_vcpus
+	#	delta_vcpus = self._total_vcpus[-1] - guest_vcpus
+	#	#print('delta_vcpus={}'.format(delta_vcpus))
+
+	#	for o in range(0,11):
+	#		potential_usage = int(round(10 * float(self._cpus) / float(o*delta_vcpus/10. + guest_vcpus), 0))
+	#		#print('o={}, potential_usage={}, probability={}, demand={}'.format(o, potential_usage, model[o], float(o*delta_vcpus + guest_vcpus)))
+	#		if potential_usage > 10: potential_usage = 10
+	#		prediction[potential_usage] += model[o]
+
+	#	#print( '{}: Prediction Array  : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in prediction ]) )
+	#	for i in range(9,-1,-1):
+	#		prediction[i] += prediction[i+1]
+	#	return prediction
+
+class GuestModel:
+	_cpus         = None # physical CPUs
+	_vcpus        = None # total VCPUs
+	_guest_vcpus  = None
+
+	def __init__(self, cpus, vcpus, guest_vcpus):
+		assert cpus > 0
+		assert vcpus >= guest_vcpus
+		self._cpus         = cpus
+		self._vcpus        = vcpus
+		self._guest_vcpus  = guest_vcpus
+
+	def minima(self):
+		if self._cpus >= self._vcpus: return (1., 1., 0.)
+		pr = float(self._vcpus % self._cpus) / self._cpus
+		min1 = 1. / math.ceil(self._vcpus / self._cpus)
+		min2 = 1. / math.floor(self._vcpus / self._cpus)
+		return (pr, min1, min2)
+
+	def potential_min_sf(self, x):
+		pr, min1, min2 = self.minima()
+		return pr * norm.sf(x, loc=min1, scale=.04) + \
+			(1 - pr) * norm.sf(x, loc=min2, scale=.04)
+
+	def potential_d_sf(self, other_demand, x):
+		assert (other_demand + self._guest_vcpus) <= self._vcpus
+		p = round(float(self._cpus) / float(other_demand + self._guest_vcpus), 3)
+		if p > self._guest_vcpus:
+			p = float(self._guest_vcpus)
+		return norm.sf(x, loc=p, scale=.05)
+
+	def potential_sf(self, other_demand, x):
+		assert (other_demand + self._guest_vcpus) <= self._vcpus
+		other_vcpus = self._vcpus - self._guest_vcpus
+		pr = float(other_vcpus - other_demand) / other_vcpus \
+			if other_vcpus > 0 and other_demand > (self._cpus - self._guest_vcpus) \
+			else 1.
+		m = self.potential_min_sf(x)
+		d = self.potential_d_sf(other_demand, x)
+		return (1. - pr) * m + pr * d
+
+	def potential_ppf(self, other_demand, pr):
+		assert isinstance(pr, int) or isinstance(pr, float) \
+			or isinstance(pr, list) or isinstance(pr, numpy.ndarray)
+
+		x = numpy.linspace(0,1,100)
+		y = self.potential_sf(other_demand, x)
+		i_y = len(y) -1
+
+		if isinstance(pr, int) or isinstance(pr, float):
+			while y[i_y] < pr and i_y > 0:
+				i_y -=1
+			return x[i_y]
+		else:
+			ret = []
+			for i in pr:
+				while y[i_y] < i and i_y > 0:
+					i_y -=1
+				ret.append(x[i_y])
+			return numpy.array(ret)
+
+	def predict1(self, other_demand):
+		if other_demand < 0: other_demand = 0.
+		ret = round(float(self._cpus) / float(other_demand + self._guest_vcpus), 3)
+		if ret > self._guest_vcpus:
+			ret = float(self._guest_vcpus)
 		return ret
 
-	def predictRatio(self, cpus, guest_vcpus, other_demand):
-		ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
-		if ret > guest_vcpus:
-			ret = float(guest_vcpus)
+	_predictLower_cache = None
+	def predictLower(self, other_demand):
+		maximum = .99 * float(self._guest_vcpus)
+		if other_demand < 0: other_demand = 0.
+
+		other_vcpus = self._vcpus - self._guest_vcpus
+		if other_vcpus <= 0: return float(self._guest_vcpus)
+
+		if self._predictLower_cache == None:
+			_, minimum, _ = self.minima()
+			mindemand = float(self._cpus) * 0.34
+			maxdemand = float(self._vcpus - self._guest_vcpus)
+			if other_demand <= mindemand: return maximum
+			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
+
+			a, b = numpy.polyfit([maximum, minimum], [mindemand, maxdemand], 1)
+			mid_y = minimum + 0.1 * (maximum - minimum)
+			mid_x = (a * mid_y + b) * .9
+
+			a, b, c = numpy.polyfit([mindemand, mid_x, maxdemand], [maximum, mid_y, minimum], 2)
+			self._predictLower_cache = (a, b, c, mindemand, maxdemand)
+		else:
+			a, b, c, mindemand, maxdemand = self._predictLower_cache
+			if other_demand <= mindemand: return maximum
+			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
+
+		ret = c + b * other_demand + a * other_demand ** 2
+		if ret > self._guest_vcpus: return maximum
 		return ret
 
-	def predictMinima(self):
-		vcpus = self._total_vcpus[-1]
-		if self._cpus >= vcpus: return [(1,1), (1,1)]
+	_predictUpper_cache = None
+	def predictUpper(self, other_demand):
+		maximum = float(self._guest_vcpus)
+		if other_demand < 0: other_demand = 0.
 
-		r = float(vcpus % self._cpus) / self._cpus
+		if self._predictUpper_cache == None:
+			_, _, minimum = self.minima()
+			mindemand = float(self._cpus) * 1.1
+			maxdemand = float(self._vcpus - self._guest_vcpus)
+			if other_demand <= mindemand: return maximum
+			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
 
-		return [(round(1 / math.ceil(vcpus / self._cpus), 2), round(r,2)), (round(1 / math.floor(vcpus / self._cpus), 2), round(1-r,2))]
+			a, b = numpy.polyfit([maximum, minimum], [mindemand, maxdemand], 1)
+			mid_y = maximum - 0.1 * (maximum - minimum)
+			mid_x = (a * mid_y + b) * 1.1
 
-	def predictCum(self, model):
-		prediction = [0. for i in range(0,11)]
+			a, b, c = numpy.polyfit([mindemand, mid_x, maxdemand], [maximum, mid_y, minimum], 2)
+			self._predictUpper_cache = (a, b, c, mindemand, maxdemand)
+		else:
+			a, b, c, mindemand, maxdemand = self._predictUpper_cache
+			if other_demand <= mindemand: return maximum
+			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
 
-		guest_vcpus = self._guest_vcpus
-		delta_vcpus = self._total_vcpus[-1] - guest_vcpus
-		#print('delta_vcpus={}'.format(delta_vcpus))
+		ret = c + b * other_demand + a * other_demand ** 2
+		if ret > self._guest_vcpus: return maximum
+		return ret
 
-		for o in range(0,11):
-			potential_usage = int(round(10 * float(self._cpus) / float(o*delta_vcpus/10. + guest_vcpus), 0))
-			#print('o={}, potential_usage={}, probability={}, demand={}'.format(o, potential_usage, model[o], float(o*delta_vcpus + guest_vcpus)))
-			if potential_usage > 10: potential_usage = 10
-			prediction[potential_usage] += model[o]
+class GuestStats:
+	time         = None
+	host_cpulist = None
+	host_cpus    = None
+	total_vcpus  = None
+	total_usage  = None
+	total_steal  = None
+	total_demand = None
+	guest_vcpus  = None
+	guest_usage  = None
+	guest_steal  = None
+	guest_demand = None
+	def __init__(self, line):
+		self.time         = int(line['time'])
+		map = line['vm']['vcpu'][0]['map']
+		self.host_cpulist = []
+		for i in range(0,len(map)):
+			if map[i] == True: self.host_cpulist.append(i)
+		self.host_cpus    = len(self.host_cpulist)
+		self.total_vcpus  = line['vm_totals']['vcpu_count']
+		self.total_usage  = line['vm_totals']['usage'] / 100.
+		self.total_steal  = line['vm_totals']['steal'] / 100.
+		self.total_demand = util.max(self.total_usage + self.total_steal, self.total_vcpus)
+		self.guest_vcpus  = line['vm']['vcpu_count']
+		self.guest_usage  = sum([ i['usage'] for i in line['vm']['vcpu'] ]) / 100.
+		self.guest_steal  = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
+		self.guest_demand = util.max(self.guest_usage + self.guest_steal, self.guest_vcpus)
 
-		#print( '{}: Prediction Array  : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in prediction ]) )
-		for i in range(9,-1,-1):
-			prediction[i] += prediction[i+1]
-		return prediction
+#############################################################################
+# GENERIC STRICTURES
+#############################################################################
 
 class MarkovChain:
 	_size          = None # Matrix size
