@@ -9,6 +9,11 @@ def max_round(value, max, decimals):
 def max(value, max):
 	return max if value > max else value
 
+def minmax(value, min, max):
+	if value > max: return max
+	if value < min: return min
+	return value
+
 def coalesce(*args):
 	for i in args:
 		if i != None:

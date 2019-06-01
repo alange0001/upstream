@@ -222,8 +222,9 @@ class GuestModel:
 
 		if self._predictLower_cache == None:
 			_, minimum, _ = self.minima()
-			mindemand = float(self._cpus) * 0.34
 			maxdemand = float(self._vcpus - self._guest_vcpus)
+			x, a, b = float(self._vcpus) / self._cpus, 2.2210526315789476, -1.8367346938775508
+			mindemand = maxdemand * util.minmax(1./(a*x + b) if (a*x + b) != 0 else 1., 0., 1.)
 			if other_demand <= mindemand: return maximum
 			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
 
@@ -237,7 +238,7 @@ class GuestModel:
 			a, b, c, mindemand, maxdemand = self._predictLower_cache
 			if other_demand <= mindemand: return maximum
 			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
-
+			
 		ret = c + b * other_demand + a * other_demand ** 2
 		if ret > self._guest_vcpus: return maximum
 		return ret
@@ -249,8 +250,9 @@ class GuestModel:
 
 		if self._predictUpper_cache == None:
 			_, _, minimum = self.minima()
-			mindemand = float(self._cpus) * 1.1
 			maxdemand = float(self._vcpus - self._guest_vcpus)
+			x, a, b = float(self._vcpus) / self._cpus, 0.9578947368421054, -0.612244897959183
+			mindemand = maxdemand * util.minmax(1./(a*x + b) if (a*x + b) != 0 else 1., 0., 1.)
 			if other_demand <= mindemand: return maximum
 			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
 
