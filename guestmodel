@@ -33,7 +33,7 @@ class Program:
 
 			host_stats = util.WatchLog('{}/stats-1'.format(self._options.stats_dir), 'json')
 
-			model5m   = Model('model-5m',  300)
+			model5m   = ModelInterface('model-5m',  300)
 
 			while True:
 				time.sleep(1)
@@ -53,8 +53,9 @@ class Program:
 			return 1  #'''
 		return 0
 
-class Model:
-	_range = [i for i in range(0,101,5)]
+class ModelInterface:
+	_range1    = numpy.array([float(i)/100. for i in range(0, 101, 5)])
+	_range100  = [i for i in range(0,101,5)]
 	# Statistics origin
 	_prefix            = None
 	_sample_limit      = 0
@@ -63,6 +64,7 @@ class Model:
 	# Time Serie Values:
 	_stats              = None
 	_other_demand_count = None
+	_guest_model        = None
 
 	def __init__(self, prefix, sample_limit):
 		assert sample_limit >= 0
@@ -71,32 +73,67 @@ class Model:
 		#self._other_demand = MarkovChain(11, sample_limit=sample_limit) # 0-10 states
 
 		self._stats = Llist(limit=sample_limit)
-		self._other_demand_count = numpy.zeros(len(self._range))
-		self._other_demand_serie = Llist(limit=sample_limit)
+		self._other_demand_count = numpy.array([ 0 for i in range(0,len(self._range100)) ])
 
 	def feed(self, stats):
 		if self._host_cpus == None:
 			self._host_cpus = stats.host_cpus
-		if self._guest_vcpus == None:
-			self._guest_vcpus = stats.guest_vcpus
 
-		del_stat = self._stats.append(stats)
+		deleted_stats = self._stats.append(stats)
+		self.addHist(stats, deleted_stats)
+
+		gm = self._guest_model
+		if gm is None or (gm._cpus, gm._vcpus, gm._guest_vcpus) != (stats.host_cpus, stats.total_vcpus, stats.guest_vcpus):
+			print('Creating new guest model: {}'.format((stats.host_cpus, stats.total_vcpus, stats.guest_vcpus)))
+			self._guest_model = GuestModel(stats.host_cpus, stats.total_vcpus, stats.guest_vcpus)
 
 	def printResults(self):
 		last_stats = self._stats[-1]
-		#histogram = self._other_demand.histogram()
-		#markov = self._other_demand.predictNext()
 		print()
-		print( '{}: Guest Usage       : {:.3f}%'.format(self._prefix, last_stats.guest_usage * 100. ))
-		print( '{}: Guest Demand      : {:.3f}%'.format(self._prefix, last_stats.guest_demand * 100. ))
-		print( '{}: Other Demand      : {:.3f}%'.format(self._prefix, last_stats.other_demand * 100. ))
-		print( '{}:                   : {}'.format(self._prefix, ' '.join([ '{:>3}'.format(i) for i in self._range ])) )
-		#print( '{}: Prediction        : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
-		#print( '{}: Prediction Hist.  : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
-		#print( '{}: Other Demand Hist.: {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in histogram ]) )
+		print( 'Guest Usage          : {:5.1f}%     Guest Demand      : {:5.1f}%'.format(last_stats.guest_usage * 100., last_stats.guest_demand * 100. ))
+		print( 'Total VCPUs:         : {:>2}         Other Demand      : {:5.1f}%'.format(last_stats.total_vcpus, 100. * last_stats.other_demand/last_stats.other_vcpus ))
+		print( 'Scale (%) ---------- : {}'.format(' '.join([ '{:>3}'.format(i) for i in self._range100 ])) )
+		print( 'Other Demand Hist.   : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.histogram100 ])) )
+		print( 'Potential VCPU Time  : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.potential100 ])) )
 
-	def convertRangeIdx(self, value):
-		pass
+	@property
+	def histogram1(self):
+		return self._other_demand_count / len(self._stats)
+	@property
+	def histogram100(self):
+		return 100. * self.histogram1
+
+	_cache_potential_matrix = None
+	@property
+	def potential1(self):
+		if self._cache_potential_matrix is None:
+			gm = self._guest_model
+			self._cache_potential_matrix = pm = []
+
+			X = self._range1 * (gm._vcpus - gm._guest_vcpus)
+			for i in X:
+				f, params = gm.potentialSF(i)
+				pm.append(util.minmax(f(self._range1, *params),0., 1.))
+
+			self._cache_potential_matrix = pm = numpy.array(pm)
+		else:
+			pm = self._cache_potential_matrix
+
+		hist = self.histogram1
+		return pm @ hist.T
+	@property
+	def potential100(self):
+		return 100 * self.potential1
+
+	def addHist(self, stats, deleted_stats):
+		if deleted_stats is not None:
+			self._other_demand_count[self.getOtherDemandIdx(deleted_stats)] -= 1
+		self._other_demand_count[self.getOtherDemandIdx(stats)] += 1
+
+	def convertRangeIdx1(self, value):
+		return int(round(value/(self._range1[1]-self._range1[0]), 0))
+	def getOtherDemandIdx(self, stats):
+		return self.convertRangeIdx1(stats.other_demand/stats.other_vcpus)
 
 class GuestModel:
 	_cpus         = None # physical CPUs
@@ -357,9 +394,9 @@ class GuestStats:
 		self.guest_steal  = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
 		self.guest_demand = util.max(self.guest_usage + self.guest_steal, self.guest_vcpus)
 	@property
-	def other_vcpus(self): return self.total_vcpus - self.guest_vcpus
+	def other_vcpus(self):  return self.total_vcpus - self.guest_vcpus
 	@property
-	def other_demand(self): return util.minmax(self.total_demand - self.guest_demand, 0., float(self.other_vcpus))
+	def other_demand(self): return util.minmax(float(self.total_demand - self.guest_demand), 0., float(self.other_vcpus))
 
 #############################################################################
 # GENERIC STRICTURES
