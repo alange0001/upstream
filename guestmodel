@@ -11,6 +11,7 @@ import numpy
 import math
 from scipy.stats import norm
 from scipy.stats import logistic
+from scipy.optimize import curve_fit
 
 import util
 
@@ -53,96 +54,49 @@ class Program:
 		return 0
 
 class Model:
+	_range = [i for i in range(0,101,5)]
 	# Statistics origin
-	_prefix        = None
-	_sample_limit  = 0
+	_prefix            = None
+	_sample_limit      = 0
 	# Hardware information
-	_cpus          = None
+	_host_cpus         = None
 	# Time Serie Values:
-	_stats         = None
-	_other_demand  = None
+	_stats              = None
+	_other_demand_count = None
 
 	def __init__(self, prefix, sample_limit):
 		assert sample_limit >= 0
 		self._prefix       = prefix
 		self._sample_limit = sample_limit
-		self._other_demand = MarkovChain(11, sample_limit=sample_limit) # 0-10 states
+		#self._other_demand = MarkovChain(11, sample_limit=sample_limit) # 0-10 states
 
 		self._stats = Llist(limit=sample_limit)
+		self._other_demand_count = numpy.zeros(len(self._range))
+		self._other_demand_serie = Llist(limit=sample_limit)
 
 	def feed(self, stats):
-		if self._cpus == None:
-			self._cpus = stats.host_cpus
+		if self._host_cpus == None:
+			self._host_cpus = stats.host_cpus
 		if self._guest_vcpus == None:
 			self._guest_vcpus = stats.guest_vcpus
 
-		#ret = collections.OrderedDict()
-
-		#other_demand_normalized = int(round(10* other_demand / other_vcpus, 0)) if other_vcpus > 0 and other_demand >= 0 else 0
-		#if other_demand_normalized > 10: other_demand_normalized = 10
-
-		##print('other_demand={}, other_demand_normalized={}'.format(other_demand, other_demand_normalized))
-
-		#self._total_usage.append( total_usage / self._cpus ) # normalized by the number of CPUs
-		#self._total_vcpus.append( total_vcpus )
-		#self._total_demand.append( total_demand )
-
-		##self._guest_usage.add( guest_usage )
-		##self._guest_steal.add( guest_steal )
-
-		#self._other_demand.increment( other_demand_normalized )
+		del_stat = self._stats.append(stats)
 
 	def printResults(self):
-		histogram = self._other_demand.histogram()
-		markov = self._other_demand.predictNext()
-		#print()
-		#print( '{}: Total usage       : {:.3f}%'.format(self._prefix, self._cpus * self._total_usage[-1] ))
-		#print( '{}: Total demand      : {:.3f}%'.format(self._prefix, self._total_demand[-1] ))
-		#print( '{}: Minima            : {}'.format(self._prefix, self.predictMinima() ))
-		#print( '{}:                   : {}'.format(self._prefix, [ '{:^5}'.format(i) for i in range(0,11) ]) )
-		#print( '{}: Histogram         : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in histogram ]) )
-		#print( '{}: Markov Chain      : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in markov ]) )
-		#print( '{}: Prediction Hist   : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
-		#print( '{}: Prediction Markov : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(markov) ]) )
+		last_stats = self._stats[-1]
+		#histogram = self._other_demand.histogram()
+		#markov = self._other_demand.predictNext()
+		print()
+		print( '{}: Guest Usage       : {:.3f}%'.format(self._prefix, last_stats.guest_usage * 100. ))
+		print( '{}: Guest Demand      : {:.3f}%'.format(self._prefix, last_stats.guest_demand * 100. ))
+		print( '{}: Other Demand      : {:.3f}%'.format(self._prefix, last_stats.other_demand * 100. ))
+		print( '{}:                   : {}'.format(self._prefix, ' '.join([ '{:>3}'.format(i) for i in self._range ])) )
+		#print( '{}: Prediction        : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
+		#print( '{}: Prediction Hist.  : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in self.predictCum(histogram) ]) )
+		#print( '{}: Other Demand Hist.: {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in histogram ]) )
 
-	#def predict(self, cpus, guest_vcpus, other_demand):
-	#	ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
-	#	if ret > guest_vcpus:
-	#		ret = float(guest_vcpus)
-	#	return ret
-
-	#def predictRatio(self, cpus, guest_vcpus, other_demand):
-	#	if other_demand < 0: other_demand = 0.
-	#	ret = round(float(cpus) / float(other_demand + guest_vcpus), 3)
-	#	if ret > guest_vcpus:
-	#		ret = float(guest_vcpus)
-	#	return ret
-
-	#def predictMinima(self):
-	#	vcpus = self._total_vcpus[-1]
-	#	if self._cpus >= vcpus: return [(1,1), (1,1)]
-
-	#	r = float(vcpus % self._cpus) / self._cpus
-
-	#	return [(round(1 / math.ceil(vcpus / self._cpus), 2), round(r,2)), (round(1 / math.floor(vcpus / self._cpus), 2), round(1-r,2))]
-
-	#def predictCum(self, model):
-	#	prediction = [0. for i in range(0,11)]
-
-	#	guest_vcpus = self._guest_vcpus
-	#	delta_vcpus = self._total_vcpus[-1] - guest_vcpus
-	#	#print('delta_vcpus={}'.format(delta_vcpus))
-
-	#	for o in range(0,11):
-	#		potential_usage = int(round(10 * float(self._cpus) / float(o*delta_vcpus/10. + guest_vcpus), 0))
-	#		#print('o={}, potential_usage={}, probability={}, demand={}'.format(o, potential_usage, model[o], float(o*delta_vcpus + guest_vcpus)))
-	#		if potential_usage > 10: potential_usage = 10
-	#		prediction[potential_usage] += model[o]
-
-	#	#print( '{}: Prediction Array  : {}'.format(self._prefix, [ '{:.3f}'.format(i) for i in prediction ]) )
-	#	for i in range(9,-1,-1):
-	#		prediction[i] += prediction[i+1]
-	#	return prediction
+	def convertRangeIdx(self, value):
+		pass
 
 class GuestModel:
 	_cpus         = None # physical CPUs
@@ -156,54 +110,20 @@ class GuestModel:
 		self._vcpus        = vcpus
 		self._guest_vcpus  = guest_vcpus
 
+	_cache_minima = None
+	@property
 	def minima(self):
-		if self._cpus >= self._vcpus: return (1., 1., 0.)
-		pr = float(self._vcpus % self._cpus) / self._cpus
-		min1 = 1. / math.ceil(self._vcpus / self._cpus)
-		min2 = 1. / math.floor(self._vcpus / self._cpus)
-		return (pr, min1, min2)
+		if self._cache_minima is None:
+			if self._cpus >= self._vcpus: return (1., 1., 1.)
+			lrM2c, lrM2i = numpy.array([-0.13706281,  0.03796571,  1.92678371]), -0.18650532291443023
 
-	def potential_min_sf(self, x):
-		pr, min1, min2 = self.minima()
-		return pr * norm.sf(x, loc=min1, scale=.04) + \
-			(1 - pr) * norm.sf(x, loc=min2, scale=.04)
-
-	def potential_d_sf(self, other_demand, x):
-		assert (other_demand + self._guest_vcpus) <= self._vcpus
-		p = round(float(self._cpus) / float(other_demand + self._guest_vcpus), 3)
-		if p > self._guest_vcpus:
-			p = float(self._guest_vcpus)
-		return norm.sf(x, loc=p, scale=.05)
-
-	def potential_sf(self, other_demand, x):
-		assert (other_demand + self._guest_vcpus) <= self._vcpus
-		other_vcpus = self._vcpus - self._guest_vcpus
-		pr = float(other_vcpus - other_demand) / other_vcpus \
-			if other_vcpus > 0 and other_demand > (self._cpus - self._guest_vcpus) \
-			else 1.
-		m = self.potential_min_sf(x)
-		d = self.potential_d_sf(other_demand, x)
-		return (1. - pr) * m + pr * d
-
-	def potential_ppf(self, other_demand, pr):
-		assert isinstance(pr, int) or isinstance(pr, float) \
-			or isinstance(pr, list) or isinstance(pr, numpy.ndarray)
-
-		x = numpy.linspace(0,1,100)
-		y = self.potential_sf(other_demand, x)
-		i_y = len(y) -1
-
-		if isinstance(pr, int) or isinstance(pr, float):
-			while y[i_y] < pr and i_y > 0:
-				i_y -=1
-			return x[i_y]
-		else:
-			ret = []
-			for i in pr:
-				while y[i_y] < i and i_y > 0:
-					i_y -=1
-				ret.append(x[i_y])
-			return numpy.array(ret)
+			pr = float(self._vcpus % self._cpus) / self._cpus
+			min1 = 1. / math.ceil(self._vcpus / self._cpus)
+			min2 = util.minmax(
+				lrM2c @ [self._cpus, self._vcpus, float(self._cpus)/self._vcpus] + lrM2i,
+				min1, float(self._guest_vcpus))
+			self._cache_minima = (pr, min1, min2)
+		return self._cache_minima
 
 	def predict1(self, other_demand):
 		if other_demand < 0: other_demand = 0.
@@ -212,64 +132,202 @@ class GuestModel:
 			ret = float(self._guest_vcpus)
 		return ret
 
-	_predictLower_cache = None
+	def getMinMaxDemand(self, coef, intercept):
+		other_vcpus = self._vcpus - self._guest_vcpus
+		assert other_vcpus >= 0
+
+		maxdemand = float(other_vcpus)
+		#linear model (cpus, vcpus/cpus) -> V'i - D'i
+		mindemand = other_vcpus - (coef @ [self._cpus, float(self._vcpus)/self._cpus] + intercept)
+		return (util.minmax(mindemand, 0., maxdemand), maxdemand)
+
+	_cache_upperMinMaxDemand = None
+	@property
+	def upperMinMaxDemand(self):
+		if self._cache_upperMinMaxDemand is None:
+			#linear model (cpus, vcpus/cpus) -> V'i - D'i
+			coef, intercept = numpy.array([1.79802902, 3.06745787]), -9.581261143965314
+			self._cache_upperMinMaxDemand = self.getMinMaxDemand(coef, intercept)
+		return self._cache_upperMinMaxDemand
+
+	_cache_middleMinMaxDemand = None
+	@property
+	def middleMinMaxDemand(self):
+		if self._cache_middleMinMaxDemand is None:
+			#linear model (cpus, vcpus/cpus) -> V'i - D'i
+			coef, intercept = numpy.array([1.65132364, 3.3874511 ]), -9.242054264663107
+			self._cache_middleMinMaxDemand = self.getMinMaxDemand(coef, intercept)
+		return self._cache_middleMinMaxDemand
+
+	_cache_lowerMinMaxDemand = None
+	@property
+	def lowerMinMaxDemand(self):
+		if self._cache_lowerMinMaxDemand is None:
+			#linear model (cpus, vcpus/cpus) -> V'i - D'i
+			coef, intercept = numpy.array([1.68083004, 3.6729249 ]), -9.239624505928855
+			self._cache_lowerMinMaxDemand = self.getMinMaxDemand(coef, intercept)
+		return self._cache_lowerMinMaxDemand
+
+	_cache_lowerMinMaxT = None
+	@property
+	def lowerMinMaxT(self):
+		if self._cache_lowerMinMaxT is None:
+			_, minimum, _ = self.minima
+			maximum = .99 * float(self._guest_vcpus)
+			self._cache_lowerMinMaxT = (util.minmax(minimum, 0., 1.), maximum)
+		return self._cache_lowerMinMaxT
+
+	_cache_predictLower_points = None
+	_cache_predictLower = None
 	def predictLower(self, other_demand):
-		maximum = .99 * float(self._guest_vcpus)
-		if other_demand < 0: other_demand = 0.
+		minimum, maximum = self.lowerMinMaxT
 
 		other_vcpus = self._vcpus - self._guest_vcpus
-		if other_vcpus <= 0: return float(self._guest_vcpus)
-
-		if self._predictLower_cache == None:
-			_, minimum, _ = self.minima()
-			maxdemand = float(self._vcpus - self._guest_vcpus)
-			x, a, b = float(self._vcpus) / self._cpus, 2.2210526315789476, -1.8367346938775508
-			mindemand = maxdemand * util.minmax(1./(a*x + b) if (a*x + b) != 0 else 1., 0., 1.)
-			if other_demand <= mindemand: return maximum
-			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
-
-			a, b = numpy.polyfit([maximum, minimum], [mindemand, maxdemand], 1)
-			mid_y = minimum + 0.1 * (maximum - minimum)
-			mid_x = (a * mid_y + b) * .9
-
-			a, b, c = numpy.polyfit([mindemand, mid_x, maxdemand], [maximum, mid_y, minimum], 2)
-			self._predictLower_cache = (a, b, c, mindemand, maxdemand)
-		else:
-			a, b, c, mindemand, maxdemand = self._predictLower_cache
-			if other_demand <= mindemand: return maximum
-			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
-			
-		ret = c + b * other_demand + a * other_demand ** 2
-		if ret > self._guest_vcpus: return maximum
-		return ret
-
-	_predictUpper_cache = None
-	def predictUpper(self, other_demand):
-		maximum = float(self._guest_vcpus)
 		if other_demand < 0: other_demand = 0.
+		if other_vcpus <= 0: return maximum
 
-		if self._predictUpper_cache == None:
-			_, _, minimum = self.minima()
-			maxdemand = float(self._vcpus - self._guest_vcpus)
-			x, a, b = float(self._vcpus) / self._cpus, 0.9578947368421054, -0.612244897959183
-			mindemand = maxdemand * util.minmax(1./(a*x + b) if (a*x + b) != 0 else 1., 0., 1.)
-			if other_demand <= mindemand: return maximum
-			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
+		f = self.sigmoid
 
-			a, b = numpy.polyfit([maximum, minimum], [mindemand, maxdemand], 1)
-			mid_y = maximum - 0.1 * (maximum - minimum)
-			mid_x = (a * mid_y + b) * 1.1
+		if self._cache_predictLower is None:
+			def fLinear(x, a, b): # linear
+				return a*x + b
 
-			a, b, c = numpy.polyfit([mindemand, mid_x, maxdemand], [maximum, mid_y, minimum], 2)
-			self._predictUpper_cache = (a, b, c, mindemand, maxdemand)
+			lrB_coef, lrB_inter = numpy.array([ 0.13784643, -0.04689495,  0.9865885 , -0.03939464]), 0.28566658562732805
+			lrT_coef, lrT_inter = numpy.array([ 0.28538262,  0.0057059 , -0.07499791,  0.0057059 ]), -0.28653033347650414
+
+			mindemand, maxdemand = self.lowerMinMaxDemand
+
+			skBx, skBy = maxdemand * (lrB_coef @ [self._cpus, self._vcpus, maximum-minimum, maxdemand-mindemand] + lrB_inter), minimum
+			if skBx > (maxdemand * .97): skBx = maxdemand * .97
+			skTx, skTy = mindemand + (lrT_coef @ [self._cpus, self._vcpus, mindemand, maxdemand] + lrT_inter), maximum
+			if skTx < (mindemand * 1.03): skTx = mindemand * 1.03
+			if skTx > (skBx * .97): skTx = skBx * .97
+			#print('skTx, skTy: ', (skTx, skTy))
+			#print('skBx, skBy: ', (skBx, skBy))
+
+			popt_sk, _ = curve_fit(fLinear, [skTx, skBx], [skTy, skBy])
+			fx = lambda x: skTx + x * (skBx - skTx)
+			midRatios = numpy.linspace(.40, .50, 5)
+			midX = [ fx(i) for i in midRatios ]
+			midY = [ fLinear(i, *popt_sk) for i in midX ]
+
+			fitX = [mindemand] + midX + [maxdemand]
+			fitY = [maximum]   + midY + [minimum]
+			self._cache_predictLower_points = ([skTx, skBx] + fitX, [skTy, skBy] + fitY)
+			#print('fitX: ', fitX)
+			#print('fitY: ', fitY)
+			method = None
+			if self._cpus == 3: method = 'dogbox'
+			popt, _ = curve_fit(f, fitX, fitY, method=method)
+			self._cache_predictLower = (popt, mindemand, maxdemand, minimum)
+			#print('popt: ', popt)
 		else:
-			a, b, c, mindemand, maxdemand = self._predictUpper_cache
-			if other_demand <= mindemand: return maximum
-			if maxdemand <= 0 or mindemand >= maxdemand: return maximum
+			popt, mindemand, maxdemand, minimum = self._cache_predictLower
 
-		ret = c + b * other_demand + a * other_demand ** 2
-		if ret > self._guest_vcpus: return maximum
-		return ret
+		if other_demand <= mindemand: return maximum
+		if maxdemand <= 0 or mindemand >= maxdemand: return maximum
+
+		return util.minmax(f(other_demand, *popt), 0., 1.)
+
+	_cache_upperMinMaxT = None
+	@property
+	def upperMinMaxT(self):
+		if self._cache_upperMinMaxT is None:
+			_, _, minimum = self.minima
+			maximum = float(self._guest_vcpus)
+			self._cache_upperMinMaxT = (util.minmax(minimum, 0., maximum), maximum)
+		return self._cache_upperMinMaxT
+
+	_cache_predictUpper_points = None
+	_cache_predictUpper = None
+	def predictUpper(self, other_demand):
+		minimum, maximum = self.upperMinMaxT
+		mindemand, maxdemand = self.upperMinMaxDemand
+		def f(x, y0, c, k):
+			return c / (1 + numpy.exp(-k*(x-maxdemand))) + y0
+
+		other_vcpus = self._vcpus - self._guest_vcpus
+		if minimum == maximum or mindemand == maxdemand: return maximum
+		if other_demand < 0: other_demand = 0.
+		if other_vcpus <= 0: return maximum
+
+		if self._cache_predictUpper is None:
+			def fLinear(x, a, b):
+				return a*x + b
+
+			# linear regression: [mindemand, maxdemand, minimum] -> D'i
+			sk_coef, sk_inter = numpy.array([ 0.62330553,  0.25020868, -1.64968515]), 1.5897770409774998
+			skx = sk_coef @ [mindemand, maxdemand, minimum] + sk_inter
+			sky = maximum
+			if skx > maxdemand or skx < mindemand: #sanity check
+				skx = (maxdemand + mindemand)/2.
+			#print('skx, sky: ', skx, sky)
+
+			midP, _ = curve_fit(fLinear, [skx, maxdemand], [sky, minimum])
+			midX = numpy.linspace(maxdemand - .02*(maxdemand-mindemand), maxdemand, 7)
+			midY = fLinear(midX, *midP)
+
+			fitX = [mindemand] + list(midX) + [maxdemand]
+			fitY = [maximum]   + list(midY) + [minimum]
+			self._cache_predictUpper_points = ([skx] + fitX, [sky] + fitY)
+			#print('fitX: ', fitX)
+			#print('fitY: ', fitY)
+			method = None
+			#if self._cpus == 3: method = 'dogbox'
+			popt, _ = curve_fit(f, fitX, fitY, method=method)
+			self._cache_predictUpper = popt
+			#print('popt: ', popt)
+		else:
+			popt = self._cache_predictUpper
+
+		if other_demand <= mindemand: return maximum
+		if maxdemand <= 0 or mindemand >= maxdemand: return maximum
+
+		return util.minmax(f(other_demand, *popt), minimum, maximum)
+
+	@staticmethod
+	def sigmoid(x, x0, y0, c, k): #sigmoid function
+		return c / (1 + numpy.exp(-k*(x-x0))) + y0
+	@staticmethod
+	def linear(x, a, b): # linear function
+		return a*x + b
+
+	_cache_potentialSF = dict()
+	_cache_potentialSF_fitX = numpy.linspace(-1.,2.,50)
+	def potentialSF(self, other_demand):
+		od_idx = int(other_demand * 10)
+		other_demand = util.minmax(round(other_demand, 1), 0., float(self._vcpus - self._guest_vcpus))
+
+		if self._cache_potentialSF.get(od_idx) is None:
+			md_lower, _   = self.lowerMinMaxDemand
+			md_middle, _  = self.middleMinMaxDemand
+			md_upper, _   = self.upperMinMaxDemand
+			_, maxima     = self.upperMinMaxT
+
+			x_upper = self.predictUpper(other_demand)
+			x_lower = self.predictLower(other_demand)
+
+			if other_demand <= md_lower:
+				params = []
+				f = lambda x: x**0
+			else:
+				f = self.sigmoid
+				min = x_lower
+				if other_demand <= md_middle:
+					max = x_lower + (maxima-x_lower)*2.
+				elif other_demand <= md_upper:
+					midP, _ = curve_fit(self.linear, [md_middle, md_upper], [maxima, (maxima + x_lower)/2.])
+					max = x_lower + 2. * (self.linear(other_demand, *midP) - x_lower)
+				else:
+					max = x_upper
+
+				fitX = self._cache_potentialSF_fitX
+				fitY = [ 1. if x <= min else 0. if x >= max else 1. - (x - min)/(max - min) for x in fitX]
+				params, _ = curve_fit(f, fitX, fitY)
+
+			self._cache_potentialSF[od_idx] = (f, params)
+
+		return self._cache_potentialSF[od_idx]
 
 class GuestStats:
 	time         = None
@@ -298,6 +356,10 @@ class GuestStats:
 		self.guest_usage  = sum([ i['usage'] for i in line['vm']['vcpu'] ]) / 100.
 		self.guest_steal  = sum([ i['steal'] for i in line['vm']['vcpu'] ]) / 100.
 		self.guest_demand = util.max(self.guest_usage + self.guest_steal, self.guest_vcpus)
+	@property
+	def other_vcpus(self): return self.total_vcpus - self.guest_vcpus
+	@property
+	def other_demand(self): return util.minmax(self.total_demand - self.guest_demand, 0., float(self.other_vcpus))
 
 #############################################################################
 # GENERIC STRICTURES
@@ -403,7 +465,8 @@ class Llist(list):
 	def append(self, item):
 		list.append(self, item)
 		if self._limit > 0 and len(self) > self._limit:
-			self.pop(0)
+			return self.pop(0)
+		return None
 
 if __name__ == '__main__':
 	exit(Program().main())

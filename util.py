@@ -2,6 +2,7 @@
 
 import collections
 import json
+import numpy
 
 def max_round(value, max, decimals):
 	return max if value > max else round(value, decimals)
@@ -10,8 +11,10 @@ def max(value, max):
 	return max if value > max else value
 
 def minmax(value, min, max):
-	if value > max: return max
-	if value < min: return min
+	if isinstance(value, numpy.ndarray):
+		return numpy.array([minmax(i, min, max) for i in value])
+	if min is not None and value < min: return min
+	if max is not None and value > max: return max
 	return value
 
 def coalesce(*args):
