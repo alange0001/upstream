@@ -90,11 +90,11 @@ class ModelInterface:
 	def printResults(self):
 		last_stats = self._stats[-1]
 		print()
-		print( 'Guest Usage          : {:5.1f}%     Guest Demand      : {:5.1f}%'.format(last_stats.guest_usage * 100., last_stats.guest_demand * 100. ))
-		print( 'Total VCPUs:         : {:>2}         Other Demand      : {:5.1f}%'.format(last_stats.total_vcpus, 100. * last_stats.other_demand/last_stats.other_vcpus ))
-		print( 'Scale (%) ---------- : {}'.format(' '.join([ '{:>3}'.format(i) for i in self._range100 ])) )
-		print( 'Other Demand Hist.   : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.histogram100 ])) )
-		print( 'Potential VCPU Time  : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.potential100 ])) )
+		print( 'Guest Usage            : {:5.1f}%    Guest Demand : {:5.1f}%    Guest Steal :  {:5.1f}%'.format(last_stats.guest_usage * 100., last_stats.guest_demand * 100., last_stats.guest_steal * 100. ))
+		print( 'Total VCPUs:           : {:>2}        Other Demand : {:5.1f}%'.format(last_stats.total_vcpus, 100. * last_stats.other_demand/last_stats.other_vcpus ))
+		print( 'Scale (%) ------------ : {}'.format(' '.join([ '{:>3}'.format(i) for i in self._range100 ])) )
+		print( 'Other Demand Histogram : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.histogram100 ])) )
+		print( 'Potential VCPU Time    : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.potential100 ])) )
 
 	@property
 	def histogram1(self):
