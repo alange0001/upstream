@@ -86,12 +86,13 @@ class ModelInterface:
 		if gm is None or (gm._cpus, gm._vcpus, gm._guest_vcpus) != (stats.host_cpus, stats.total_vcpus, stats.guest_vcpus):
 			print('Creating new guest model: {}'.format((stats.host_cpus, stats.total_vcpus, stats.guest_vcpus)))
 			self._guest_model = GuestModel(stats.host_cpus, stats.total_vcpus, stats.guest_vcpus)
+			self._cache_potential_matrix = None # cleaning model matrix
 
 	def printResults(self):
 		last_stats = self._stats[-1]
 		print()
-		print( 'Guest Usage            : {:5.1f}%    Guest Demand : {:5.1f}%    Guest Steal :  {:5.1f}%'.format(last_stats.guest_usage * 100., last_stats.guest_demand * 100., last_stats.guest_steal * 100. ))
-		print( 'Total VCPUs:           : {:>2}        Other Demand : {:5.1f}%'.format(last_stats.total_vcpus, 100. * last_stats.other_demand/last_stats.other_vcpus ))
+		print( 'Guest Usage            : {usage:5.1f}%    Guest Steal :  {steal:5.1f}%    Guest Demand : {demand:5.1f}%'.format(usage=last_stats.guest_usage * 100., demand=last_stats.guest_demand * 100., steal=last_stats.guest_steal * 100. ))
+		print( 'Total CPUs:            : {cpus:>2}        Total VCPUs :  {vcpus:>2}        Other Demand : {od:5.1f}%'.format(cpus=self._host_cpus, vcpus=last_stats.total_vcpus, od=100. * last_stats.other_demand/last_stats.other_vcpus ))
 		print( 'Scale (%) ------------ : {}'.format(' '.join([ '{:>3}'.format(i) for i in self._range100 ])) )
 		print( 'Other Demand Histogram : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.histogram100 ])) )
 		print( 'Potential VCPU Time    : {}'.format(' '.join([ '{:3.0f}'.format(i) for i in self.potential100 ])) )
@@ -108,7 +109,7 @@ class ModelInterface:
 	def potential1(self):
 		if self._cache_potential_matrix is None:
 			gm = self._guest_model
-			self._cache_potential_matrix = pm = []
+			pm = []
 
 			X = self._range1 * (gm._vcpus - gm._guest_vcpus)
 			for i in X:
@@ -120,7 +121,7 @@ class ModelInterface:
 			pm = self._cache_potential_matrix
 
 		hist = self.histogram1
-		return pm @ hist.T
+		return hist @ pm
 	@property
 	def potential100(self):
 		return 100 * self.potential1
@@ -253,9 +254,10 @@ class GuestModel:
 			self._cache_predictLower_points = ([skTx, skBx] + fitX, [skTy, skBy] + fitY)
 			#print('fitX: ', fitX)
 			#print('fitY: ', fitY)
-			method = None
-			if self._cpus == 3: method = 'dogbox'
-			popt, _ = curve_fit(f, fitX, fitY, method=method)
+			try:
+				popt, _ = curve_fit(f, fitX, fitY)
+			except RuntimeError:
+				popt, _ = curve_fit(f, fitX, fitY, method='dogbox')
 			self._cache_predictLower = (popt, mindemand, maxdemand, minimum)
 			#print('popt: ', popt)
 		else:
@@ -309,9 +311,10 @@ class GuestModel:
 			self._cache_predictUpper_points = ([skx] + fitX, [sky] + fitY)
 			#print('fitX: ', fitX)
 			#print('fitY: ', fitY)
-			method = None
-			#if self._cpus == 3: method = 'dogbox'
-			popt, _ = curve_fit(f, fitX, fitY, method=method)
+			try:
+				popt, _ = curve_fit(f, fitX, fitY)
+			except RuntimeError:
+				popt, _ = curve_fit(f, fitX, fitY, method='dogbox')
 			self._cache_predictUpper = popt
 			#print('popt: ', popt)
 		else:
@@ -330,7 +333,7 @@ class GuestModel:
 		return a*x + b
 
 	_cache_potentialSF = dict()
-	_cache_potentialSF_fitX = numpy.linspace(-1.,2.,50)
+	_cache_potentialSF_fitX = numpy.linspace(-1.,2.,200)
 	def potentialSF(self, other_demand):
 		od_idx = int(other_demand * 10)
 		other_demand = util.minmax(round(other_demand, 1), 0., float(self._vcpus - self._guest_vcpus))
@@ -349,6 +352,9 @@ class GuestModel:
 				f = lambda x: x**0
 			else:
 				f = self.sigmoid
+				def fx0(x0): # if we know x0
+					return lambda x, y0, c, k: f(x, x0, y0, c, k)
+
 				min = x_lower
 				if other_demand <= md_middle:
 					max = x_lower + (maxima-x_lower)*2.
@@ -358,9 +364,18 @@ class GuestModel:
 				else:
 					max = x_upper
 
+
 				fitX = self._cache_potentialSF_fitX
 				fitY = [ 1. if x <= min else 0. if x >= max else 1. - (x - min)/(max - min) for x in fitX]
-				params, _ = curve_fit(f, fitX, fitY)
+				x0 = (max + min)/2.
+				#print('other_demand', other_demand)
+				#print('fitX, fitY', fitX, fitY)
+				try:
+					params, _ = curve_fit(fx0(x0), fitX, fitY)
+				except RuntimeError:
+					params, _ = curve_fit(fx0(x0), fitX, fitY, method='dogbox')
+				params = [x0] + list(params)
+				#print('params', params)
 
 			self._cache_potentialSF[od_idx] = (f, params)
 

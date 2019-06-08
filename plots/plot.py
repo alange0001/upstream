@@ -403,9 +403,9 @@ def printPotential(other_demand, exp=None):
 		ax.legend(loc='best', frameon=True)
 		plt.show()
 
-exp=(3,9)
+exp=(3,6)
 printDataModels(exp)
-printPotential(7, exp)
+printPotential(4.5, exp)
 
 #############################################################
 # Summary of Experiments
