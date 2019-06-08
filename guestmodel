@@ -8,7 +8,6 @@ import argparse
 import collections
 import math
 import numpy
-import math
 from scipy.stats import norm
 from scipy.stats import logistic
 from scipy.optimize import curve_fit
@@ -227,8 +226,6 @@ class GuestModel:
 		f = self.sigmoid
 
 		if self._cache_predictLower is None:
-			def fLinear(x, a, b): # linear
-				return a*x + b
 
 			lrB_coef, lrB_inter = numpy.array([ 0.13784643, -0.04689495,  0.9865885 , -0.03939464]), 0.28566658562732805
 			lrT_coef, lrT_inter = numpy.array([ 0.28538262,  0.0057059 , -0.07499791,  0.0057059 ]), -0.28653033347650414
@@ -243,11 +240,11 @@ class GuestModel:
 			#print('skTx, skTy: ', (skTx, skTy))
 			#print('skBx, skBy: ', (skBx, skBy))
 
-			popt_sk, _ = curve_fit(fLinear, [skTx, skBx], [skTy, skBy])
+			popt_sk, _ = curve_fit(self.linear, [skTx, skBx], [skTy, skBy])
 			fx = lambda x: skTx + x * (skBx - skTx)
 			midRatios = numpy.linspace(.40, .50, 5)
 			midX = [ fx(i) for i in midRatios ]
-			midY = [ fLinear(i, *popt_sk) for i in midX ]
+			midY = [ self.linear(i, *popt_sk) for i in midX ]
 
 			fitX = [mindemand] + midX + [maxdemand]
 			fitY = [maximum]   + midY + [minimum]
@@ -255,9 +252,10 @@ class GuestModel:
 			#print('fitX: ', fitX)
 			#print('fitY: ', fitY)
 			try:
-				popt, _ = curve_fit(f, fitX, fitY)
+				popt, _ = curve_fit(f, fitX, fitY, method=None if self._cpus != 3 else 'dogbox')
 			except RuntimeError:
 				popt, _ = curve_fit(f, fitX, fitY, method='dogbox')
+
 			self._cache_predictLower = (popt, mindemand, maxdemand, minimum)
 			#print('popt: ', popt)
 		else:
@@ -291,8 +289,6 @@ class GuestModel:
 		if other_vcpus <= 0: return maximum
 
 		if self._cache_predictUpper is None:
-			def fLinear(x, a, b):
-				return a*x + b
 
 			# linear regression: [mindemand, maxdemand, minimum] -> D'i
 			sk_coef, sk_inter = numpy.array([ 0.62330553,  0.25020868, -1.64968515]), 1.5897770409774998
@@ -302,9 +298,9 @@ class GuestModel:
 				skx = (maxdemand + mindemand)/2.
 			#print('skx, sky: ', skx, sky)
 
-			midP, _ = curve_fit(fLinear, [skx, maxdemand], [sky, minimum])
+			midP, _ = curve_fit(self.linear, [skx, maxdemand], [sky, minimum])
 			midX = numpy.linspace(maxdemand - .02*(maxdemand-mindemand), maxdemand, 7)
-			midY = fLinear(midX, *midP)
+			midY = self.linear(midX, *midP)
 
 			fitX = [mindemand] + list(midX) + [maxdemand]
 			fitY = [maximum]   + list(midY) + [minimum]

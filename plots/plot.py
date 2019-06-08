@@ -369,7 +369,7 @@ def printDataModels(experiment=None):
 		plt.show()
 
 #printDataModels((3,7))
-#printDataModels()
+printDataModels()
 
 def printPotential(other_demand, exp=None):
 	X = numpy.linspace(0,1,50)
@@ -403,9 +403,9 @@ def printPotential(other_demand, exp=None):
 		ax.legend(loc='best', frameon=True)
 		plt.show()
 
-exp=(3,6)
-printDataModels(exp)
-printPotential(4.5, exp)
+#exp=(3,6)
+#printDataModels(exp)
+#printPotential(0, exp)
 
 #############################################################
 # Summary of Experiments
