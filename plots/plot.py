@@ -14,17 +14,16 @@ class config:
 	project_dir = '/home/alange/workspace/dr/topics1/upstream'
 	host_dir    = '/media/auto/alange-ms01-r/virtual/hostshare'
 	vm_prefix   = 'test-load'
-	plot_telemetry = False
 	experiments    = [
 			(2,4),
-			(2,5),
-			(2,6),
-			(3,4),
-			(3,5),
-			(3,6),
-			(3,7),
-			(3,8),
-			(3,9),
+			#(2,5),
+			#(2,6),
+			#(3,4),
+			#(3,5),
+			#(3,6),
+			#(3,7),
+			#(3,8),
+			#(3,9),
 			]
 	@classmethod
 	def getVMFile(cls, cpus, vms, n):
@@ -258,19 +257,25 @@ for experiment_idx in config.experiments:
 	experiments.add(experiment_data)
 
 	#############################################################
-	# Usage, Steal, and Demand
-	if config.plot_telemetry:
+	# Telemetry: Usage, Steal, and Demand
+	if False:
 		fig, axs = plt.subplots(experiment_data.total_vcpus, 1)
-		fig.set_figheight(7)
+		fig.set_figheight(experiment_idx[1])
 
 		for i in range(1, experiment_data.total_vcpus +1):
 			stats = experiment_data if i == 1 else VMStats(*experiment_idx, i)
-			axs[i-1].set_ylim(bottom=-0.05, top=1.1)
-			axs[i-1].plot(stats.time, stats.guest_usage,  lw=1)
-			axs[i-1].plot(stats.time, stats.guest_steal,  lw=1)
-			axs[i-1].plot(stats.time, stats.guest_demand,  lw=1)
+			ax = axs[i-1]
+			ax.set_ylim(bottom=-0.05, top=1.1)
+			ax.plot(stats.time, stats.guest_usage,  lw=1)
+			ax.plot(stats.time, stats.guest_steal,  lw=1)
+			ax.plot(stats.time, stats.guest_demand,  lw=1)
+			if i < experiment_idx[1]:
+				plt.setp( ax.get_xticklabels(), visible=False)
+			else:
+				ax.set_xlabel('experiment time (s)')
 
-		fig.legend(loc='lower center', labels=['usage', 'steal', 'VM\'s demand'], ncol=3, frameon=True)
+		fig.legend(loc='lower center', labels=['time (Ti)', 'steal time (Si)', 'demand (Di)'], ncol=3, frameon=True)
+		#fig.savefig('telemetry-{},{}.pdf'.format(*experiment_idx))
 		plt.show()
 
 
@@ -579,9 +584,12 @@ def fitBegin(percentile, cut_threshold):
 
 	return data_p_ini
 
+
 #p05 = fitBegin( 5,.97)
 #p50 = fitBegin(50,.97)
 #p95 = fitBegin(95,.97)
+
+
 
 
 '''

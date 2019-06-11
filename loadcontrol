@@ -5,6 +5,8 @@ import os
 import sys
 import time
 import random
+import subprocess
+import numpy
 
 class LoadControl:
 	_options = None
@@ -31,6 +33,9 @@ class LoadControl:
 		parser.add_argument('-r', '--reenter',
 			default=False, action='store_true',
 			help='periodically stops and starts the load of the first VM')
+		parser.add_argument('-P', '--postcommand',
+			default=None,
+			help='command executed after the experiment')
 		self._options = parser.parse_args()
 
 	def main(self):
@@ -62,6 +67,9 @@ class LoadControl:
 				count += 1
 				time.sleep(1)
 
+			if options.postcommand is not None:
+				subprocess.getstatusoutput(options.postcommand)
+
 		except KeyboardInterrupt:
 			pass
 		except AssertionError as e:
@@ -78,7 +86,8 @@ class LoadControl:
 
 	def _buildLoad(self, vms):
 		interval = 7
-		phases = [ .8, .6, .4, .2, .1, 0. ]
+		shuffles = vms + 2
+		phases = [ .8, .6, .5, .4, .3, .2, .1, .05, 0. ]
 		load = self._load
 
 		time = 5
@@ -88,7 +97,7 @@ class LoadControl:
 			for o in range(0, len(other_vms)):
 				other_vms[o] = ph
 				aux = other_vms[:]
-				for i in range(0,20):
+				for i in range(0,shuffles):
 					time += interval
 					random.shuffle(aux)
 					#print(aux)
@@ -101,7 +110,7 @@ class LoadControl:
 							time += 2
 							load.append((time, self._vms[0], 0))
 
-		time += 10
+		time += 20
 		for i in range(0,vms):
 			load.append((time, self._vms[i], -1))
 
