@@ -152,13 +152,11 @@ class GuestModel:
 	def minima(self):
 		if self._cache_minima is None:
 			if self._cpus >= self._vcpus: return (1., 1., 1.)
-			lrM2c, lrM2i = numpy.array([-0.13706281,  0.03796571,  1.92678371]), -0.18650532291443023
 
 			pr = float(self._vcpus % self._cpus) / self._cpus
 			min1 = 1. / math.ceil(self._vcpus / self._cpus)
-			min2 = util.minmax(
-				lrM2c @ [self._cpus, self._vcpus, float(self._cpus)/self._vcpus] + lrM2i,
-				min1, float(self._guest_vcpus))
+			min2 = numpy.floor((self._vcpus-.1*numpy.floor(2/self._cpus))/(self._cpus))
+			min2 = 1. / min2 if min2 != 0 else 1.
 			self._cache_minima = (pr, min1, min2)
 		return self._cache_minima
 
@@ -174,16 +172,16 @@ class GuestModel:
 		assert other_vcpus >= 0
 
 		maxdemand = float(other_vcpus)
-		#linear model (cpus, vcpus/cpus) -> V'i - D'i
-		mindemand = other_vcpus - (coef @ [self._cpus, float(self._vcpus)/self._cpus] + intercept)
+		#linear model (cpus, vcpus) -> V'i - D'i
+		mindemand = other_vcpus - (coef @ [self._cpus, self._vcpus] + intercept)
 		return (util.minmax(mindemand, 0., maxdemand), maxdemand)
 
 	_cache_upperMinMaxDemand = None
 	@property
 	def upperMinMaxDemand(self):
 		if self._cache_upperMinMaxDemand is None:
-			#linear model (cpus, vcpus/cpus) -> V'i - D'i
-			coef, intercept = numpy.array([1.79802902, 3.06745787]), -9.581261143965314
+			#linear model (cpus, vcpus) -> V'i - D'i
+			coef, intercept = numpy.array([-0.94281337,  1.15931281]), -2.3087146249085393
 			self._cache_upperMinMaxDemand = self.getMinMaxDemand(coef, intercept)
 		return self._cache_upperMinMaxDemand
 
@@ -191,8 +189,8 @@ class GuestModel:
 	@property
 	def middleMinMaxDemand(self):
 		if self._cache_middleMinMaxDemand is None:
-			#linear model (cpus, vcpus/cpus) -> V'i - D'i
-			coef, intercept = numpy.array([1.65132364, 3.3874511 ]), -9.242054264663107
+			#linear model (cpus, vcpus) -> V'i - D'i
+			coef, intercept = numpy.array([-1.4568809 ,  1.23594513]), -0.7347126360425662
 			self._cache_middleMinMaxDemand = self.getMinMaxDemand(coef, intercept)
 		return self._cache_middleMinMaxDemand
 
@@ -201,7 +199,7 @@ class GuestModel:
 	def lowerMinMaxDemand(self):
 		if self._cache_lowerMinMaxDemand is None:
 			#linear model (cpus, vcpus/cpus) -> V'i - D'i
-			coef, intercept = numpy.array([1.68083004, 3.6729249 ]), -9.239624505928855
+			coef, intercept = numpy.array([-1.57704029,  1.15738785]), 0.8500094259766389
 			self._cache_lowerMinMaxDemand = self.getMinMaxDemand(coef, intercept)
 		return self._cache_lowerMinMaxDemand
 
@@ -224,11 +222,13 @@ class GuestModel:
 		if other_vcpus <= 0: return maximum
 
 		f = self.sigmoid
+		def fx0(x0): # if we know x0
+			return lambda x, y0, c, k: f(x, x0, y0, c, k)
 
 		if self._cache_predictLower is None:
 
-			lrB_coef, lrB_inter = numpy.array([ 0.13784643, -0.04689495,  0.9865885 , -0.03939464]), 0.28566658562732805
-			lrT_coef, lrT_inter = numpy.array([ 0.28538262,  0.0057059 , -0.07499791,  0.0057059 ]), -0.28653033347650414
+			lrB_coef, lrB_inter = numpy.array([ 0.06516075,  0.0072663 ,  0.79507271, -0.0943512 ]), 0.4928450044542721
+			lrT_coef, lrT_inter = numpy.array([ 0.06547156, -0.04983179,  0.11109421, -0.04983179]), 0.6248301216731804
 
 			mindemand, maxdemand = self.lowerMinMaxDemand
 
@@ -246,15 +246,20 @@ class GuestModel:
 			midX = [ fx(i) for i in midRatios ]
 			midY = [ self.linear(i, *popt_sk) for i in midX ]
 
+			x0 = (skTx + skBx) /2.
+
 			fitX = [mindemand] + midX + [maxdemand]
 			fitY = [maximum]   + midY + [minimum]
 			self._cache_predictLower_points = ([skTx, skBx] + fitX, [skTy, skBy] + fitY)
 			#print('fitX: ', fitX)
 			#print('fitY: ', fitY)
 			try:
-				popt, _ = curve_fit(f, fitX, fitY, method=None if self._cpus != 3 else 'dogbox')
+				method=None if self._cpus != 3 else 'dogbox'
+				popt, _ = curve_fit(fx0(x0), fitX, fitY, method=method)
 			except RuntimeError:
-				popt, _ = curve_fit(f, fitX, fitY, method='dogbox')
+				popt, _ = curve_fit(fx0(x0), fitX, fitY, method='dogbox')
+
+			popt = [x0] + list(popt)
 
 			self._cache_predictLower = (popt, mindemand, maxdemand, minimum)
 			#print('popt: ', popt)
@@ -280,8 +285,9 @@ class GuestModel:
 	def predictUpper(self, other_demand):
 		minimum, maximum = self.upperMinMaxT
 		mindemand, maxdemand = self.upperMinMaxDemand
+
 		def f(x, y0, c, k):
-			return c / (1 + numpy.exp(-k*(x-maxdemand))) + y0
+			return self.sigmoid(x, maxdemand, y0, c, k)
 
 		other_vcpus = self._vcpus - self._guest_vcpus
 		if minimum == maximum or mindemand == maxdemand: return maximum
@@ -291,7 +297,8 @@ class GuestModel:
 		if self._cache_predictUpper is None:
 
 			# linear regression: [mindemand, maxdemand, minimum] -> D'i
-			sk_coef, sk_inter = numpy.array([ 0.62330553,  0.25020868, -1.64968515]), 1.5897770409774998
+			#sk_coef, sk_inter = numpy.array([ 2.07395101, -0.18816185, -6.76425159]), 2.9946852139288844
+			sk_coef, sk_inter = numpy.array([ 1.17606831,  0.21330589, -2.02319076]), 0.5407987892931465
 			skx = sk_coef @ [mindemand, maxdemand, minimum] + sk_inter
 			sky = maximum
 			if skx > maxdemand or skx < mindemand: #sanity check

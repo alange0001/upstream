@@ -284,9 +284,9 @@ class Stat:
 		cpuset = self.readFile(cgroupfile)
 		cpus1 = cpuset.split(',')
 		for i in cpus1:
-			cpus2 = i.split('-')
-			for j in cpus2:
-				ret[int(j)] = True
+			cpus2 = [ int(j) for j in i.split('-') ]
+			for j in range(cpus2[0],cpus2[-1]+1):
+				ret[j] = True
 		return ret
 
 	def getProc(self, vm_name, vcpus):

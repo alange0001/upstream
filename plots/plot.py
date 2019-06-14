@@ -16,19 +16,21 @@ class config:
 	vm_prefix   = 'test-load'
 	experiments    = [
 			(2,4),
-			#(2,5),
-			#(2,6),
-			#(3,4),
-			#(3,5),
-			#(3,6),
-			#(3,7),
-			#(3,8),
-			#(3,9),
+			(2,5),
+			(2,6),
+			(2,7),
+			(2,8),
+			(3,4),
+			(3,5),
+			(3,6),
+			(3,7),
+			(3,8),
+			(3,9),
 			]
 	@classmethod
 	def getVMFile(cls, cpus, vms, n):
 		#return '{}/profile/test-load{}/stats-1'.format(config.host_dir, n)
-		return '{}/plots/data3-intel/cpu{}-vm{}/test-load{}/stats-1'.format(cls.project_dir, cpus, vms, n)
+		return '{}/plots/data4-intel/cpu{}-vm{}/test-load{}/stats-1'.format(cls.project_dir, cpus, vms, n)
 
 sys.path.append(config.project_dir)
 import util
@@ -160,21 +162,39 @@ class VMStats:
 	def fitF(self, f, percentile, method=None):
 		x = self.other_demand_idx
 		y = self.usage_percentiles(percentile)
+
 		if method is None and (self.host_cpus, self.total_vcpus) in [(3,5)]:
 			method = 'dogbox'
-
-		popt, _ = curve_fit(f, x, y, method=method)
+		try:
+			popt, _ = curve_fit(f, x, y, method=method)
+		except RuntimeError:
+			popt, _ = curve_fit(f, x, y, method='dogbox')
 		return popt
 
 	#sigmoid function
 	@staticmethod
-	def fSigmoid(x, x0, y0, c, k):
+	def sigmoid(x, x0, y0, c, k):
 		return c / (1 + numpy.exp(-k*(x-x0))) + y0
 
 	def fitSigmoid(self, percentile):
-		return (self.fSigmoid, self.fitF(self.fSigmoid, percentile))
+		f = self.sigmoid
+		x = self.other_demand_idx
+		y = self.usage_percentiles(percentile)
+		method = None if (self.host_cpus, self.total_vcpus) not in [(3,5)] else 'dogbox'
 
-	def getDemandByT(self, percentile, T, f=fSigmoid):
+		try:
+			popt, _ = curve_fit(f, x, y, method=method)
+		except RuntimeError:
+			try:
+				popt, _ = curve_fit(f, x, y, method='dogbox')
+			except RuntimeError:
+				x0 = x[-1]
+				f2 = lambda x, y0, c, k: f(x, x0, y0, c, k)
+				popt, _ = curve_fit(f2, x, y, method='dogbox')
+				popt = [x0] + list(popt)
+		return (f, popt)
+
+	def getDemandByT(self, percentile, T, f=sigmoid):
 		idx = self.other_demand_idx
 
 		if f is None:
@@ -193,9 +213,9 @@ class VMStats:
 		percentile = 95
 		_, maxdemand = self.model.upperMinMaxDemand
 		def f(x, y0, c, k):
-			return c / (1 + numpy.exp(-k*(x-maxdemand))) + y0
+			return self.sigmoid(x, maxdemand, y0, c, k)
 		popt = self.fitF(f, percentile)
-		return (f, popt)
+		return (self.sigmoid, [maxdemand] + list(popt))
 
 
 class ExperimentSet:
@@ -214,22 +234,63 @@ class ExperimentSet:
 		for k, d in self.items():
 			idx = (d.total_vcpus - d.guest_vcpus - d.getDemandByT(percentile, T, f=f))
 			Y.append(idx)
-			X.append([d.host_cpus, float(d.total_vcpus)/d.host_cpus])
+			X.append([d.host_cpus, d.total_vcpus])
 		lr = linear_model.LinearRegression()
 		lr.fit(X, Y)
 		return lr
 
 	def fitUpperMinimum(self):
+		def m(cpus, vcpus):
+			aux = numpy.floor((vcpus-.1*numpy.floor(2/cpu))/(cpus))
+			return 1. / aux if aux != 0 else 1.
+
 		X = []
 		Y = []
 		for k, d in self.items():
 			_, maxdemand = d.model.upperMinMaxDemand
-			fU, pU = d.fitUpper()
-			X.append((d.host_cpus, d.total_vcpus, float(d.host_cpus)/d.total_vcpus))
-			Y.append(fU(maxdemand, *pU))
+			X.append((d.host_cpus, d.total_vcpus))
+			y = d.usage_percentiles(95)
+			Y.append(y[-1])
 
-		lr = linear_model.LinearRegression().fit(X, Y)
-		return lr
+		print('X', X)
+		print('Y', Y)
+
+		fig, ax = plt.subplots(1, 1)
+		fig.set_figheight(4)
+		#ax.set_xlabel('x')
+		#ax.set_ylabel('Pr')
+
+		colors = ['orange', 'red']
+		for cpu in set([int(d[0]) for d in X]):
+			color = colors.pop(0)
+			X2, Y2 = [], []
+			for i in range(0,len(X)):
+				if X[i][0] == cpu:
+					X2.append(X[i])
+					Y2.append(Y[i])
+			ax.plot([x[1] for x in X2], Y2, 'o', label='M={}'.format(cpu), color=color)
+			ax.plot([x[1] for x in X2], [m(*x) for x in X2], '-', label='M={} model'.format(cpu))
+
+		"""
+		def f(cpus): return lambda x, a, b: 1. / (numpy.ceil((x + a)/(cpus)) + b)
+		X2 = numpy.array([4, 5, 6, 7, 8])
+		Y2 = numpy.array([1.0, 0.5, 0.5, 0.33, 0.33])
+		params, _ = curve_fit(f(2), X2, Y2)
+		print('cpu2 params:', params)
+		#X2 = numpy.linspace(X2[0], X2[-1], 50)
+		ax.plot(X2, f(2)(X2, *params), ':', label='M={} fit2'.format(2))
+		X3 = numpy.array([4, 5, 6, 7, 8, 9])
+		Y3 = numpy.array([1.  , 1.  , 0.5 , 0.5 , 0.5 , 0.33])
+		params, _ = curve_fit(f(3), X3, Y3)
+		print('cpu3 params:', params)
+		#X3 = numpy.linspace(X3[0], X3[-1], 50)
+		ax.plot(X3, f(3)(X3, *params), ':', label='M={} fit3'.format(3))
+		#"""
+
+		ax.legend(loc='best', frameon=False)
+		#fig.savefig('survival_function.pdf')
+		plt.show()
+
 
 	def fitUpperS(self):
 		flinear = lambda x, a, b: a*x + b
@@ -270,7 +331,7 @@ for experiment_idx in config.experiments:
 			ax.plot(stats.time, stats.guest_steal,  lw=1)
 			ax.plot(stats.time, stats.guest_demand,  lw=1)
 			if i < experiment_idx[1]:
-				plt.setp( ax.get_xticklabels(), visible=False)
+				plt.setp(ax.get_xticklabels(), visible=False)
 			else:
 				ax.set_xlabel('experiment time (s)')
 
@@ -281,6 +342,8 @@ for experiment_idx in config.experiments:
 
 	experiment_data.cutThreshold(.98)
 
+
+#experiments.fitUpperMinimum()
 
 #############################################################
 # Data and Models per experiment
@@ -329,7 +392,7 @@ def printDataModels(experiment=None):
 
 		#############################################################
 		# Models minus Data
-		if True:
+		if False:
 			fig, ax = plt.subplots(1, 1)
 			fig.set_figheight(3)
 			ax.set_title('Upper Model - Data: CPUs {}, VMs {}'.format(experiment_data.host_cpus, experiment_data.total_vcpus))
@@ -373,8 +436,9 @@ def printDataModels(experiment=None):
 
 		plt.show()
 
-#printDataModels((3,7))
-printDataModels()
+#printDataModels((2,5))
+#printDataModels((2,6))
+#printDataModels()
 
 def printPotential(other_demand, exp=None):
 	X = numpy.linspace(0,1,50)
@@ -504,28 +568,32 @@ def printSummary(percentile, experiment=None):
 		pass
 
 if False:
-	printSummary(5, (2,4))
-	printSummary(5, (2,5))
-	printSummary(5, (2,6))
-	printSummary(5, (3,4))
-	printSummary(5, (3,5))
-	printSummary(5, (3,6))
-	printSummary(5, (3,7))
-	printSummary(5, (3,8))
-	printSummary(5, (3,9))
-	#printSummary(95, (2,4))
-	#printSummary(95, (2,5))
-	#printSummary(95, (2,6))
-	#printSummary(95, (3,4))
-	#printSummary(95, (3,5))
-	#printSummary(95, (3,6))
-	#printSummary(95, (3,7))
-	#printSummary(95, (3,8))
-	#printSummary(95, (3,9))
+	#printSummary(5, (2,4))
+	#printSummary(5, (2,5))
+	#printSummary(5, (2,6))
+	#printSummary(5, (2,7))
+	#printSummary(5, (2,8))
+	#printSummary(5, (3,4))
+	#printSummary(5, (3,5))
+	#printSummary(5, (3,6))
+	#printSummary(5, (3,7))
+	#printSummary(5, (3,8))
+	#printSummary(5, (3,9))
+	printSummary(95, (2,4))
+	printSummary(95, (2,5))
+	printSummary(95, (2,6))
+	printSummary(95, (2,7))
+	printSummary(95, (2,8))
+	printSummary(95, (3,4))
+	printSummary(95, (3,5))
+	printSummary(95, (3,6))
+	printSummary(95, (3,7))
+	printSummary(95, (3,8))
+	printSummary(95, (3,9))
 	#printSummary(5, [(3,7),(3,8), (3,9)])
 if False:
-	#lrs = printSummary(5)
-	printSummary(95)
+	lrs = printSummary(5)
+	#printSummary(95)
 
 def fitBegin(percentile, cut_threshold):
 	def fL(x, a, b): #linear
@@ -535,10 +603,10 @@ def fitBegin(percentile, cut_threshold):
 	f = None
 
 	fig, ax = plt.subplots(1, 1)
-	fig.set_figheight(5)
-	ax.set_title('Fit Initials: percentile {}, cut {}'.format(percentile, cut_threshold))
+	fig.set_figheight(3)
+	ax.set_title('Fit Initials: percentile {}, threshold {}'.format(percentile, cut_threshold))
 	ax.set_ylabel('V\'i - D\'i')
-	ax.set_xlabel('N / M')
+	ax.set_xlabel('N')
 	ax.grid()
 
 	data_p_ini = []
@@ -546,29 +614,31 @@ def fitBegin(percentile, cut_threshold):
 		cpus, total_vcpus = experiment_idx
 		guest_vcpus = experiment_data.guest_vcpus
 
-		idx = (total_vcpus - guest_vcpus - experiment_data.getDemandByT(percentile, cut_threshold, f=f))
-		data_p_ini.append((float(total_vcpus)/cpus, idx, experiment_idx))
+		y = (total_vcpus - guest_vcpus - experiment_data.getDemandByT(percentile, cut_threshold, f=f))
+		#y = experiment_data.getDemandByT(percentile, cut_threshold, f=f)/(total_vcpus - guest_vcpus)
+		data_p_ini.append((cpus, total_vcpus, y))
 
 	data_p_ini.sort(key=lambda x: x[0])
-	x = numpy.array([ d[0] for d in data_p_ini ])
-	y = numpy.array([ d[1] for d in data_p_ini ])
-	ax.plot( x, y,'+', label='data', color='black')
+	x = numpy.array([ d[1] for d in data_p_ini ])
+	y = numpy.array([ d[2] for d in data_p_ini ])
+	#ax.plot( x, y,'+', label='data', color='black')
 
 	def filter(data, cpus):
 		ret = []
 		for i in data:
-			if i[2][0] == cpus:
+			if i[0] == cpus:
 				ret.append(i)
 		return ret
 	data_per_cpu = collections.OrderedDict()
-	for i in set([d[2][0] for d in data_p_ini]):
+	for i in set([d[0] for d in data_p_ini]):
 		data_per_cpu[i] = filter(data_p_ini, i)
-	ax.plot( [ d[0] for d in data_per_cpu[2] ], [ d[1] for d in data_per_cpu[2] ], '*', label='data M=2', color='red')
-	ax.plot( [ d[0] for d in data_per_cpu[3] ], [ d[1] for d in data_per_cpu[3] ], '*', label='data M=3', color='blue')
+	ax.plot( [ d[1] for d in data_per_cpu[2] ], [ d[2] for d in data_per_cpu[2] ], '*', label='data M=2', color='red')
+	ax.plot( [ d[1] for d in data_per_cpu[3] ], [ d[2] for d in data_per_cpu[3] ], '*', label='data M=3', color='blue')
 
+	#"""
 	lr = experiments.fitPercentileT(percentile, cut_threshold, f=f)
 
-	x2 = numpy.linspace(0, 4, 50)
+	x2 = numpy.linspace(0, 9, 50)
 
 	xaux = numpy.array([(2, i) for i in x2])
 	ax.plot(x2, util.minmax(lr.predict(xaux), 0., None), '-', label='fit M=2', color='red')
@@ -577,17 +647,17 @@ def fitBegin(percentile, cut_threshold):
 	n=4
 	xaux = numpy.array([(n, i) for i in x2])
 	ax.plot(x2, util.minmax(lr.predict(xaux), 0., None), '.', label='projection M={}'.format(n), color='darkred')
-
+	#"""
 
 	ax.legend(loc='best', frameon=False)
+	fig.savefig('initials_p{}_cut{}.pdf'.format(percentile, int(cut_threshold*100)))
 	plt.show()
 
-	return data_p_ini
+	return lr
 
-
-#p05 = fitBegin( 5,.97)
-#p50 = fitBegin(50,.97)
-#p95 = fitBegin(95,.97)
+p05 = fitBegin( 5,.97)
+p50 = fitBegin(50,.97)
+p95 = fitBegin(95,.97)
 
 
 
@@ -597,28 +667,25 @@ def fitBegin(percentile, cut_threshold):
 # Tests
 from scipy.stats import norm
 
-g = guestmodel.GuestModel(3,5,1)
 
-X = numpy.linspace(0,1,50)
-I = numpy.linspace(0,5,30)
+fig, ax = plt.subplots(1, 1)
+fig.set_figheight(2)
+plt.setp( ax.get_xticklabels(), visible=False)
+ax.set_xlabel('x')
+ax.set_ylabel('Pr')
 
-for i in I:
-	f, p = g.potentialSF(i)
-	plt.plot(X, f(X, *p), '-')
-
-	X2 = numpy.array([g.predictLower(i), g.predictUpper(i)])
-	plt.plot(X2, f(X2, *p), '*')
-
-
-#fig, ax = plt.subplots(1, 1)
-
-#x = numpy.linspace(1.3,4,50)
-
-# Plot the results
-#ax.plot(x, 1./(9*numpy.log(x) -1.5), '-', label='1')
-#ax.plot(x, 10./(2**x + 2*x), '-', label='2')
-#ax.plot(x, 1./numpy.log(2*x), '-', label='3')
+X = numpy.linspace(norm.ppf(.001), norm.ppf(.999),50)
+Y = norm.sf(X, scale=.6)
+ax.plot(X,Y)
 
 #ax.legend(loc='best', frameon=False)
+fig.savefig('survival_function.pdf')
+plt.show()
+
+
+
+
+
+
 
 #'''

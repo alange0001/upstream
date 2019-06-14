@@ -104,7 +104,7 @@ class LoadControl:
 					for o2 in range(0, len(other_vms)):
 						load.append((time, self._vms[o2+1], aux[o2]))
 					if self._options.reenter:
-						if i in [0, 3]:
+						if i == int(shuffles/2):
 							time += 1
 							load.append((time, self._vms[0], -1))
 							time += 2
