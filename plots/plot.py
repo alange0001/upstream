@@ -109,13 +109,15 @@ class VMStats:
 			usage = self.guest_usage
 
 			other_vcpus = self.total_vcpus - self.guest_vcpus
-			demand_idx = numpy.linspace(0, other_vcpus, 3 * other_vcpus)
-			#demand_idx = numpy.array([round(i,2) for i in demand_idx])
+			demand_idx = numpy.array(list(numpy.linspace(0, other_vcpus - 0.08 , 3 * other_vcpus)) + [other_vcpus])
 			demand_delta = demand_idx[1] - demand_idx[0]
 			usage_by_other_demand = [ list() for i in range(0,len(demand_idx)) ]
 
 			for i in range(0,len(other_demand)):
-				od_i = int(round(other_demand[i]/demand_delta,0))
+				if other_demand[i] == other_vcpus:
+					od_i = len(demand_idx)-1
+				else:
+					od_i = int(round(other_demand[i]/demand_delta,0))
 				usage_by_other_demand[od_i].append(usage[i])
 
 			self._cache_other_demand_idx = numpy.array(demand_idx)
@@ -239,56 +241,43 @@ class ExperimentSet:
 		lr.fit(X, Y)
 		return lr
 
-	def fitUpperMinimum(self):
-		def m(cpus, vcpus):
-			aux = numpy.floor((vcpus-.1*numpy.floor(2/cpu))/(cpus))
-			return 1. / aux if aux != 0 else 1.
-
-		X = []
-		Y = []
+	def fitMinDemand(self):
+		X, Y = [], []
+		Yp5 = []
 		for k, d in self.items():
 			_, maxdemand = d.model.upperMinMaxDemand
 			X.append((d.host_cpus, d.total_vcpus))
 			y = d.usage_percentiles(95)
 			Y.append(y[-1])
+			y = d.usage_percentiles(5)
+			Yp5.append(y[-1])
 
 		print('X', X)
 		print('Y', Y)
 
 		fig, ax = plt.subplots(1, 1)
-		fig.set_figheight(4)
-		#ax.set_xlabel('x')
-		#ax.set_ylabel('Pr')
+		fig.set_figheight(5)
+		ax.set_xlabel('N')
+		ax.set_ylabel('Ti')
+		ax.grid()
 
-		colors = ['orange', 'red']
+		colors = ['red', 'blue']
 		for cpu in set([int(d[0]) for d in X]):
 			color = colors.pop(0)
-			X2, Y2 = [], []
+			X2, Y2, Y2p5 = [], [], []
 			for i in range(0,len(X)):
 				if X[i][0] == cpu:
 					X2.append(X[i])
 					Y2.append(Y[i])
-			ax.plot([x[1] for x in X2], Y2, 'o', label='M={}'.format(cpu), color=color)
-			ax.plot([x[1] for x in X2], [m(*x) for x in X2], '-', label='M={} model'.format(cpu))
+					Y2p5.append(Yp5[i])
+			ax.plot([x[1] for x in X2], Y2p5, 'x', label='M={} p05'.format(cpu), color=color)
+			ax.plot([x[1] for x in X2], Y2, 'o', label='M={} p95'.format(cpu), color=color)
 
-		"""
-		def f(cpus): return lambda x, a, b: 1. / (numpy.ceil((x + a)/(cpus)) + b)
-		X2 = numpy.array([4, 5, 6, 7, 8])
-		Y2 = numpy.array([1.0, 0.5, 0.5, 0.33, 0.33])
-		params, _ = curve_fit(f(2), X2, Y2)
-		print('cpu2 params:', params)
-		#X2 = numpy.linspace(X2[0], X2[-1], 50)
-		ax.plot(X2, f(2)(X2, *params), ':', label='M={} fit2'.format(2))
-		X3 = numpy.array([4, 5, 6, 7, 8, 9])
-		Y3 = numpy.array([1.  , 1.  , 0.5 , 0.5 , 0.5 , 0.33])
-		params, _ = curve_fit(f(3), X3, Y3)
-		print('cpu3 params:', params)
-		#X3 = numpy.linspace(X3[0], X3[-1], 50)
-		ax.plot(X3, f(3)(X3, *params), ':', label='M={} fit3'.format(3))
-		#"""
+			ax.plot([x[1] for x in X2], [1. / numpy.ceil((x[1]) / (x[0])) for x in X2], ':', lw=2, label='M={} l^fin'.format(cpu), color=color)
+			ax.plot([x[1] for x in X2], [1. / numpy.floor((x[1]) / (x[0])) for x in X2], '-', lw=1, label='M={} u^fin'.format(cpu), color=color)
 
 		ax.legend(loc='best', frameon=False)
-		#fig.savefig('survival_function.pdf')
+		fig.savefig('lfin,ufin.pdf')
 		plt.show()
 
 
@@ -343,24 +332,28 @@ for experiment_idx in config.experiments:
 	experiment_data.cutThreshold(.98)
 
 
-#experiments.fitUpperMinimum()
+#experiments.fitMinDemand()
 
 #############################################################
 # Data and Models per experiment
-def printDataModels(experiment=None):
+def printDataModels(experiment=None, save=None):
 	for experiment_idx, experiment_data in experiments.items():
 		if experiment is not None and experiment != experiment_idx and experiment_idx not in experiment: continue
 		fig, ax = plt.subplots(1, 1)
-		fig.set_figheight(4)
-		ax.set_title('Models: CPUs {}, VMs {}'.format(experiment_data.host_cpus, experiment_data.total_vcpus))
+		fig.set_figheight(3)
+		#ax.set_title('Models: CPUs {}, VMs {}'.format(experiment_data.host_cpus, experiment_data.total_vcpus))
+		ax.grid()
 
 
 		guest_model = experiment_data.model
 		#ax.set_ylim(bottom=-5, top=110)
 		ax.plot(experiment_data.other_demand, experiment_data.guest_usage,   '.', lw=1, color="#447F95", label='data')
-		ax.plot(experiment_data.other_demand_idx, [ guest_model.predict1(o) for o in experiment_data.other_demand_idx ], '-', lw=2.5, color='#07BA4F', label='initial m')
-		ax.plot(experiment_data.other_demand_idx, [ guest_model.predictLower(o) for o in experiment_data.other_demand_idx ], '-', lw=2.5, color='#14C0CC', label='lower m')
-		ax.plot(experiment_data.other_demand_idx, [ guest_model.predictUpper(o) for o in experiment_data.other_demand_idx ], '-', lw=2.5, color='#14C0CC', label='upper m')
+
+		#ax.plot(experiment_data.other_demand_idx, [ guest_model.predict1(o) for o in experiment_data.other_demand_idx ], '-', lw=2.5, color='#07BA4F', label='initial m')
+
+		if save in [None, 'model']:
+			ax.plot(experiment_data.other_demand_idx, [ guest_model.predictLower(o) for o in experiment_data.other_demand_idx ], '-', lw=2.5, color='#14C0CC', label='lower')
+			ax.plot(experiment_data.other_demand_idx, [ guest_model.predictUpper(o) for o in experiment_data.other_demand_idx ], '-', lw=2.5, color='#14C0CC', label='upper')
 
 		#fit_f, fit_p = experiment_data.fitSigmoid(5)
 		#ax.plot(experiment_data.other_demand_idx, fit_f(experiment_data.other_demand_idx, *fit_p), '-', lw=2.5, color='black')
@@ -384,9 +377,13 @@ def printDataModels(experiment=None):
 			ax.plot(x1, f(x1, *popt), '-', lw=2.5, color='red')
 
 
-		ax.set_ylabel('Ti')
-		ax.set_xlabel('D\'i')
+		ax.set_ylabel('T1')
+		ax.set_xlabel('D\'1')
 		ax.legend(loc='best', ncol=2, frameon=True)
+		if save == 'data':
+			fig.savefig('data-{},{}.pdf'.format(*experiment_idx))
+		elif save == 'model':
+			fig.savefig('models-{},{}.pdf'.format(*experiment_idx))
 		plt.show()
 
 
@@ -438,43 +435,52 @@ def printDataModels(experiment=None):
 
 #printDataModels((2,5))
 #printDataModels((2,6))
-#printDataModels()
+printDataModels(save='model')
 
-def printPotential(other_demand, exp=None):
+def printPotential(other_demand=None, exp=None):
 	X = numpy.linspace(0,1,50)
 
 	for eIdx, eData in experiments.items():
 		if exp is not None and exp != eIdx and eIdx not in exp: continue
-		fig, ax = plt.subplots(1, 1)
-		fig.set_figheight(5)
-		ax.grid()
-		ax.set_title('Potential CPU time M={}, N={}, D\'i={}'.format(eIdx[0], eIdx[1], other_demand))
-		ax.set_ylabel('probability')
-		ax.set_xlabel('Ti')
 
-		f, p = eData.model.potentialSF(other_demand)
-		ax.plot(X, f(X, *p), '-', label='sf model')
+		od_list = [ x/2. for x in range( 0, 2*(eIdx[1]-eData.guest_vcpus) +1 )] if other_demand is None else [other_demand]
 
-		data = list(eData.guest_usage_by_other_demand[eData.other_demand_idx_index(other_demand)])
-		data.sort()
-		Y = numpy.zeros(50)
-		for i in range(len(X)-1, 0, -1):
-			limit = (X[i]+X[i-1])/2.
-			while len(data) > 0 and data[-1] > limit:
-				Y[i] += 1
-				data.pop()
-		Y = Y/sum(Y)
-		for i in range(len(Y)-2, -1, -1): Y[i] += Y[i+1]
+		for od in od_list:
+			fig, ax = plt.subplots(1, 1)
+			fig.set_figheight(2.5)
+			ax.grid()
+			ax.set_title('Potential CPU time M={}, N={}, D\'i={}'.format(eIdx[0], eIdx[1], od))
+			ax.set_ylabel('Pr')
+			ax.set_xlabel('Pi >= x')
 
-		ax.plot(X, Y, '-', label='sf data')
-		#plt.hist(data, bins=25, density=True, alpha=0.6, color='g')
+			colors = ['C1', 'C0']
 
-		ax.legend(loc='best', frameon=True)
-		plt.show()
+			sp = []
+			f, p = eData.model.potentialSF(od, save_points=sp)
+			ax.plot(X, f(X, *p), '-', label='model', color=colors.pop(0))
+			if len(sp) == 2:
+				ax.plot(sp[0], sp[1], '+', label='ref points')
 
-#exp=(3,6)
+			data = list(eData.guest_usage_by_other_demand[eData.other_demand_idx_index(od)])
+			data.sort()
+			Y = numpy.zeros(50)
+			for i in range(len(X)-1, 0, -1):
+				limit = (X[i]+X[i-1])/2.
+				while len(data) > 0 and data[-1] > limit:
+					Y[i] += 1
+					data.pop()
+			Y = Y/sum(Y)
+			for i in range(len(Y)-2, -1, -1): Y[i] += Y[i+1]
+
+			ax.plot(X, Y, '-', label='data D\'1={:.1f}'.format(od), color=colors.pop(0))
+
+			ax.legend(loc='best', frameon=True)
+			fig.savefig('potential-{},{},{}.pdf'.format(*eIdx, '{:.1f}'.format(od).replace('.','_')))
+			plt.show()
+
+#exp=(3,7)
 #printDataModels(exp)
-#printPotential(0, exp)
+#printPotential()
 
 #############################################################
 # Summary of Experiments
@@ -483,11 +489,13 @@ def printSummary(percentile, experiment=None):
 	inter = lambda f1, f2: (f1[1] - f2[1])/(f2[0] - f1[0])
 
 	fig, ax = plt.subplots(1, 1)
-	fig.set_figheight(5)
+	fig.set_figheight(3)
 	ax.grid()
-	ax.set_title('Normalized Percentile {}'.format(percentile))
+	add_title = ', M={}, N={}'.format(*experiment) if experiment is not None else ''
+	#ax.set_title('Normalized Percentile {}{}'.format(percentile, add_title))
 	ax.set_ylabel('Ti')
 	ax.set_xlabel('D\'i')
+	filename = None
 
 	if percentile == 5:
 		ret_dataT= collections.OrderedDict()
@@ -503,14 +511,14 @@ def printSummary(percentile, experiment=None):
 
 		x = experiment_data.other_demand_idx
 		y = experiment_data.usage_percentiles(percentile)
-		ax.plot(	x, y, '-', lw=1, label='M={}, N={}'.format(cpus, total_vcpus))
+		ax.plot(x, y, '-', lw=1, label='data')
 
 		x2 = numpy.linspace(0,x[-1],50)
 
 		if percentile == 5: # curve fit Lower
 			f, popt = experiment_data.fitSigmoid(percentile)
 			print(experiment_idx, 'fit ', popt)
-			ax.plot(x2, f(x2, *popt), '.', label='M={}, N={} fit'.format(cpus, total_vcpus))
+			ax.plot(x2, f(x2, *popt), ':', lw=2, label='data fit')
 
 			minimum, maximum = experiment_data.model.lowerMinMaxT
 			mindemand, maxdemand = experiment_data.model.lowerMinMaxDemand
@@ -526,15 +534,17 @@ def printSummary(percentile, experiment=None):
 
 			x4 = [mindemand, inter(popt_mid, (0, maximum)), inter(popt_mid, (0, minimum)), maxdemand]
 			y4 = [maximum, maximum, minimum, minimum]
-			ax.plot(x4, y4, 'o')
-			ax.plot([x4[1], x4[2]], [maximum, minimum], '-', label='M={}, N={} skew'.format(cpus, total_vcpus), lw=2)
+			#ax.plot(x4, y4, 'o')
+			#ax.plot([x4[1], x4[2]], [maximum, minimum], '-', label='inflect. point angle')
 
 			ret_dataB[(experiment_idx[0], experiment_idx[1], maximum-minimum, x4[3] - x4[0])] = x4[2]/x4[3]
 			ret_dataT[(cpus, total_vcpus, mindemand, maxdemand)] = x4[1]-x4[0] if x4[1]-x4[0] >= 0 else 0.
 
-			ax.plot(x2, [experiment_data.model.predictLower(i) for i in x2], '-', label='M={}, N={} pL'.format(cpus, total_vcpus))
+			ax.plot(x2, [experiment_data.model.predictLower(i) for i in x2], '-', label='lower function', lw=2)
 			lowerPoints = experiment_data.model._cache_predictLower_points
-			ax.plot(lowerPoints[0], lowerPoints[1], '+', label='M={}, N={} pL p'.format(cpus, total_vcpus), color='purple')
+			ax.plot(lowerPoints[0], lowerPoints[1], '+', label='ref. points', color='purple')
+
+			filename = 'fit_lower-{},{}.pdf'.format(*experiment_idx)
 
 		elif percentile == 95: # curve fit Upper
 			mindemand, maxdemand = experiment_data.model.upperMinMaxDemand
@@ -543,19 +553,23 @@ def printSummary(percentile, experiment=None):
 			f, popt = experiment_data.fitUpper()
 
 			print(experiment_idx, 'fit ', popt)
-			ax.plot(x2, f(x2, *popt), '.', label='M={}, N={} fit'.format(cpus, total_vcpus))
+			ax.plot(x2, f(x2, *popt), ':', label='data fit', lw=2)
 
 			midX = numpy.array([maxdemand-.01, maxdemand])
 			midY = f(midX, *popt)
 			midP, _ = curve_fit(flinear, midX, midY)
-			ax.plot([inter(midP, (0,maximum)), maxdemand], [maximum, f(maxdemand, *popt)], 'o', label='fit ref')
+			#ax.plot([inter(midP, (0,maximum)), maxdemand], [maximum, f(maxdemand, *popt)], 'o', label='fit ref')
 
-			ax.plot(x2, [experiment_data.model.predictUpper(i) for i in x2], '-', label='M={}, N={} pU'.format(cpus, total_vcpus))
+			ax.plot(x2, [experiment_data.model.predictUpper(i) for i in x2], '-', label='upper function')
 			upperPoints = experiment_data.model._cache_predictUpper_points
 			if upperPoints is not None:
-				ax.plot(upperPoints[0], upperPoints[1], '+', label='M={}, N={} pU p'.format(cpus, total_vcpus), color='purple')
+				ax.plot(upperPoints[0], upperPoints[1], '+', label='ref. points', color='purple')
+
+			filename = 'fit_upper-{},{}.pdf'.format(*experiment_idx)
 
 	ax.legend(loc='best', frameon=False)
+	if filename is not None:
+		fig.savefig(filename)
 	plt.show()
 
 	if percentile == 5:
@@ -568,17 +582,18 @@ def printSummary(percentile, experiment=None):
 		pass
 
 if False:
-	#printSummary(5, (2,4))
-	#printSummary(5, (2,5))
-	#printSummary(5, (2,6))
-	#printSummary(5, (2,7))
-	#printSummary(5, (2,8))
-	#printSummary(5, (3,4))
-	#printSummary(5, (3,5))
-	#printSummary(5, (3,6))
-	#printSummary(5, (3,7))
-	#printSummary(5, (3,8))
-	#printSummary(5, (3,9))
+	printSummary(5, (2,4))
+	printSummary(5, (2,5))
+	printSummary(5, (2,6))
+	printSummary(5, (2,7))
+	printSummary(5, (2,8))
+	printSummary(5, (3,4))
+	printSummary(5, (3,5))
+	printSummary(5, (3,6))
+	printSummary(5, (3,7))
+	printSummary(5, (3,8))
+	printSummary(5, (3,9))
+if False:
 	printSummary(95, (2,4))
 	printSummary(95, (2,5))
 	printSummary(95, (2,6))
@@ -604,7 +619,7 @@ def fitBegin(percentile, cut_threshold):
 
 	fig, ax = plt.subplots(1, 1)
 	fig.set_figheight(3)
-	ax.set_title('Fit Initials: percentile {}, threshold {}'.format(percentile, cut_threshold))
+	#ax.set_title('Fit Initials: percentile {}, threshold {}'.format(percentile, cut_threshold))
 	ax.set_ylabel('V\'i - D\'i')
 	ax.set_xlabel('N')
 	ax.grid()
@@ -650,14 +665,14 @@ def fitBegin(percentile, cut_threshold):
 	#"""
 
 	ax.legend(loc='best', frameon=False)
-	fig.savefig('initials_p{}_cut{}.pdf'.format(percentile, int(cut_threshold*100)))
+	#fig.savefig('initials_p{}_cut{}.pdf'.format(percentile, int(cut_threshold*100)))
 	plt.show()
 
 	return lr
 
-p05 = fitBegin( 5,.97)
-p50 = fitBegin(50,.97)
-p95 = fitBegin(95,.97)
+#p05 = fitBegin( 5,.97)
+#p50 = fitBegin(50,.97)
+#p95 = fitBegin(95,.97)
 
 
 
@@ -667,21 +682,33 @@ p95 = fitBegin(95,.97)
 # Tests
 from scipy.stats import norm
 
-
+"""
 fig, ax = plt.subplots(1, 1)
-fig.set_figheight(2)
-plt.setp( ax.get_xticklabels(), visible=False)
+fig.set_figheight(1.7)
+#plt.setp( ax.get_xticklabels(), visible=False)
 ax.set_xlabel('x')
 ax.set_ylabel('Pr')
 
 X = numpy.linspace(norm.ppf(.001), norm.ppf(.999),50)
 Y = norm.sf(X, scale=.6)
-ax.plot(X,Y)
+ax.plot(X/6 + .5,Y)
 
 #ax.legend(loc='best', frameon=False)
 fig.savefig('survival_function.pdf')
 plt.show()
+"""
 
+
+def fitNorm(min, max):
+	delta = norm.ppf(.95) - norm.ppf(.05)
+
+	n = norm(loc=(min+max)/2.,scale=numpy.abs(max-min)/delta)
+	X = numpy.linspace(n.ppf(.01), n.ppf(.99),50)
+	Y = n.sf(X)
+	plt.grid()
+	plt.plot(X,Y)
+
+	return n
 
 
 

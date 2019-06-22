@@ -154,9 +154,10 @@ class GuestModel:
 			if self._cpus >= self._vcpus: return (1., 1., 1.)
 
 			pr = float(self._vcpus % self._cpus) / self._cpus
-			min1 = 1. / math.ceil(self._vcpus / self._cpus)
-			min2 = numpy.floor((self._vcpus-.1*numpy.floor(2/self._cpus))/(self._cpus))
-			min2 = 1. / min2 if min2 != 0 else 1.
+			min1 = 1. / numpy.ceil(self._vcpus / self._cpus)
+			min2 = 1. / numpy.floor(self._vcpus / self._cpus)
+			#min2 = numpy.floor((self._vcpus-.1*numpy.floor(2/self._cpus))/(self._cpus))
+			#min2 = 1. / min2 if min2 != 0 else 1.
 			self._cache_minima = (pr, min1, min2)
 		return self._cache_minima
 
@@ -181,7 +182,7 @@ class GuestModel:
 	def upperMinMaxDemand(self):
 		if self._cache_upperMinMaxDemand is None:
 			#linear model (cpus, vcpus) -> V'i - D'i
-			coef, intercept = numpy.array([-0.94281337,  1.15931281]), -2.3087146249085393
+			coef, intercept = numpy.array([-0.9439321 ,  1.15453228]), -2.2365625088698846
 			self._cache_upperMinMaxDemand = self.getMinMaxDemand(coef, intercept)
 		return self._cache_upperMinMaxDemand
 
@@ -190,7 +191,7 @@ class GuestModel:
 	def middleMinMaxDemand(self):
 		if self._cache_middleMinMaxDemand is None:
 			#linear model (cpus, vcpus) -> V'i - D'i
-			coef, intercept = numpy.array([-1.4568809 ,  1.23594513]), -0.7347126360425662
+			coef, intercept = numpy.array([-1.371381  ,  1.25095466]), -1.0448967549075037
 			self._cache_middleMinMaxDemand = self.getMinMaxDemand(coef, intercept)
 		return self._cache_middleMinMaxDemand
 
@@ -199,7 +200,7 @@ class GuestModel:
 	def lowerMinMaxDemand(self):
 		if self._cache_lowerMinMaxDemand is None:
 			#linear model (cpus, vcpus/cpus) -> V'i - D'i
-			coef, intercept = numpy.array([-1.57704029,  1.15738785]), 0.8500094259766389
+			coef, intercept = numpy.array([-1.55654236,  1.19614369]), 0.5098170810976161
 			self._cache_lowerMinMaxDemand = self.getMinMaxDemand(coef, intercept)
 		return self._cache_lowerMinMaxDemand
 
@@ -227,8 +228,8 @@ class GuestModel:
 
 		if self._cache_predictLower is None:
 
-			lrB_coef, lrB_inter = numpy.array([ 0.06516075,  0.0072663 ,  0.79507271, -0.0943512 ]), 0.4928450044542721
-			lrT_coef, lrT_inter = numpy.array([ 0.06547156, -0.04983179,  0.11109421, -0.04983179]), 0.6248301216731804
+			lrB_coef, lrB_inter = numpy.array([ 0.05565018,  0.00559747,  0.58581952, -0.07992648]), 0.5840163495774345
+			lrT_coef, lrT_inter = numpy.array([ 0.06365918, -0.01462816,  0.10195744, -0.01462816]), 0.1769223623197278
 
 			mindemand, maxdemand = self.lowerMinMaxDemand
 
@@ -297,8 +298,7 @@ class GuestModel:
 		if self._cache_predictUpper is None:
 
 			# linear regression: [mindemand, maxdemand, minimum] -> D'i
-			#sk_coef, sk_inter = numpy.array([ 2.07395101, -0.18816185, -6.76425159]), 2.9946852139288844
-			sk_coef, sk_inter = numpy.array([ 1.17606831,  0.21330589, -2.02319076]), 0.5407987892931465
+			sk_coef, sk_inter = numpy.array([ 1.16511444,  0.2594726 , -1.90870499]), 0.3116374030336706
 			skx = sk_coef @ [mindemand, maxdemand, minimum] + sk_inter
 			sky = maximum
 			if skx > maxdemand or skx < mindemand: #sanity check
@@ -335,54 +335,55 @@ class GuestModel:
 	def linear(x, a, b): # linear function
 		return a*x + b
 
-	_cache_potentialSF = dict()
 	_cache_potentialSF_fitX = numpy.linspace(-1.,2.,200)
-	def potentialSF(self, other_demand):
-		od_idx = int(other_demand * 10)
+	def potentialSF(self, other_demand, save_points=None):
 		other_demand = util.minmax(round(other_demand, 1), 0., float(self._vcpus - self._guest_vcpus))
 
-		if self._cache_potentialSF.get(od_idx) is None:
-			md_lower, _   = self.lowerMinMaxDemand
-			md_middle, _  = self.middleMinMaxDemand
-			md_upper, _   = self.upperMinMaxDemand
-			_, maxima     = self.upperMinMaxT
+		md_lower, _   = self.lowerMinMaxDemand
+		md_middle, _  = self.middleMinMaxDemand
+		md_upper, _   = self.upperMinMaxDemand
+		_, maxima     = self.upperMinMaxT
 
-			x_upper = self.predictUpper(other_demand)
-			x_lower = self.predictLower(other_demand)
+		x_upper = self.predictUpper(other_demand)
+		x_lower = self.predictLower(other_demand)
 
-			if other_demand <= md_lower:
-				params = []
-				f = lambda x: x**0
+		if other_demand <= md_lower:
+			params = []
+			f = lambda x: x**0
+		else:
+			f = self.sigmoid
+			def fx0(x0): # if we know x0
+				return lambda x, y0, c, k: f(x, x0, y0, c, k)
+
+			min = x_lower
+			if other_demand <= md_middle:
+				max = x_lower + (maxima-x_lower)*2.
+			elif other_demand <= md_upper:
+				midP, _ = curve_fit(self.linear, [md_middle, md_upper], [maxima, (maxima + x_lower)/2.])
+				max = x_lower + 2. * (self.linear(other_demand, *midP) - x_lower)
 			else:
-				f = self.sigmoid
-				def fx0(x0): # if we know x0
-					return lambda x, y0, c, k: f(x, x0, y0, c, k)
+				max = x_upper
 
-				min = x_lower
-				if other_demand <= md_middle:
-					max = x_lower + (maxima-x_lower)*2.
-				elif other_demand <= md_upper:
-					midP, _ = curve_fit(self.linear, [md_middle, md_upper], [maxima, (maxima + x_lower)/2.])
-					max = x_lower + 2. * (self.linear(other_demand, *midP) - x_lower)
-				else:
-					max = x_upper
+			fitX = self._cache_potentialSF_fitX
+			delta = norm.ppf(.95) - norm.ppf(.05)
+			n = norm(loc=(min+max)/2.,scale=numpy.abs(max-min)/delta)
+			fitY = n.sf(fitX)
+			x0 = (max + min)/2.
 
+			#print('other_demand', other_demand)
+			#print('fitX, fitY', fitX, fitY)
+			if save_points is not None: #for debug
+				save_points.append([min, max])
+				save_points.append([n.sf(min), n.sf(max)])
 
-				fitX = self._cache_potentialSF_fitX
-				fitY = [ 1. if x <= min else 0. if x >= max else 1. - (x - min)/(max - min) for x in fitX]
-				x0 = (max + min)/2.
-				#print('other_demand', other_demand)
-				#print('fitX, fitY', fitX, fitY)
-				try:
-					params, _ = curve_fit(fx0(x0), fitX, fitY)
-				except RuntimeError:
-					params, _ = curve_fit(fx0(x0), fitX, fitY, method='dogbox')
-				params = [x0] + list(params)
-				#print('params', params)
+			try:
+				params, _ = curve_fit(fx0(x0), fitX, fitY)
+			except RuntimeError:
+				params, _ = curve_fit(fx0(x0), fitX, fitY, method='dogbox')
+			params = [x0] + list(params)
+			#print('params', params)
 
-			self._cache_potentialSF[od_idx] = (f, params)
-
-		return self._cache_potentialSF[od_idx]
+		return (f, params)
 
 class GuestStats:
 	time         = None
