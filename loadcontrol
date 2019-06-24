@@ -110,7 +110,7 @@ class LoadControl:
 							time += 2
 							load.append((time, self._vms[0], 0))
 
-		time += 20
+		time += 30
 		for i in range(0,vms):
 			load.append((time, self._vms[i], -1))
 
